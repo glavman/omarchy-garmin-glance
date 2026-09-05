@@ -122,6 +122,21 @@ in Coach consent and the approved snapshot. Polling is clamped to 1-60 minutes,
 defaults to 5, and backs off after errors. `grafanaUrl` defaults to
 `http://127.0.0.1:3000`; it can include a specific dashboard path.
 
+`demoMode: true` forces synthetic data. With `false` (the default), the plugin
+uses `fetch/cache --auto-demo`: an absent default connection file shows the demo
+without accessing the database or cache. A present but invalid file or a failing
+connection never triggers demo fallback. Refresh detects a newly created config.
+Older implicit-localhost installs without a file now show the preview; configure
+an explicit private connection as described in [SETUP.md](SETUP.md).
+Plain CLI `fetch`, `cache` and `doctor` retain their implicit-default behavior;
+`doctor` cannot use either demo flag and is not proof of READ-only grants.
+
+**Set up live data** / `S` opens the in-plugin guide with the exact README prompt,
+an explicit copy action, a documentation link and refresh. It never collects
+credentials or launches an agent. Tab moves among setup controls, Up/Down and
+Page Up/Down scroll, and Escape returns to dashboard navigation. Coach and
+Grafana/Connect actions remain disabled for demo data.
+
 ### Garmin Connect Links
 
 `A`, activity-row clicks and activity-context `O` / `Enter` open

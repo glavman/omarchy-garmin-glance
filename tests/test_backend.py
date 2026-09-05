@@ -145,7 +145,7 @@ class BackendTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.env = patch.dict(os.environ, {"XDG_CACHE_HOME": self.temp.name,
+        self.env = patch.dict(os.environ, {"HOME": self.temp.name, "XDG_CACHE_HOME": self.temp.name,
                                           "http_proxy": "http://127.0.0.1:1", "HTTP_PROXY": "http://127.0.0.1:1",
                                           "https_proxy": "http://127.0.0.1:1", "NO_PROXY": "", "no_proxy": ""})
         self.env.start()
@@ -169,8 +169,12 @@ class BackendTests(unittest.TestCase):
         type(self).content_length = None
         type(self).statements = None
 
-    def config_file(self, contents):
-        path = Path(self.temp.name) / "connection.json"
+    def config_file(self, contents, default=False):
+        root = Path(self.temp.name)
+        if default:
+            root = root / ".config/omarchy-garmin-glance"
+            root.mkdir(parents=True, exist_ok=True)
+        path = root / "connection.json"
         path.write_text(json.dumps(contents))
         path.chmod(0o600)
         return path
@@ -649,10 +653,93 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(list(Path(self.temp.name).iterdir()), [])
 
     def test_invalid_args_sanitized(self):
-        for args in (("fetch", "--password", "fixture-secret"), ("doctor", "--demo"), ("unknown",), ()):
+        for args in (("fetch", "--password", "fixture-secret"), ("doctor", "--demo"),
+                     ("doctor", "--auto-demo"), ("fetch", "--auto-demo", "--demo"), ("unknown",), ()):
             code, result = self.cli(*args)
             self.assertEqual(code, 1)
             self.assertEqual(result["error"], "invalid_arguments")
+
+    def test_auto_demo_absent_default_never_accesses_cache_or_network(self):
+        with patch.object(b, "request", side_effect=AssertionError), \
+                patch.object(b, "cache_location", side_effect=AssertionError), \
+                patch.object(b, "read_cache", side_effect=AssertionError):
+            for command in ("cache", "fetch"):
+                for flags in ((), ("--charts",)):
+                    with self.subTest(command=command, flags=flags):
+                        code, result = self.cli(command, "--auto-demo", *flags)
+                        self.assertEqual(code, 0)
+                        self.assertEqual(result["status"], "demo")
+                        self.assertEqual(result["device"]["source"], "demo")
+                        self.assertEqual(bool(result["charts"]["steps"]), bool(flags))
+        self.assertEqual(list(Path(self.temp.name).iterdir()), [])
+
+    def test_auto_demo_explicit_missing_config_is_an_error(self):
+        default = Path(self.temp.name) / ".config/omarchy-garmin-glance/connection.json"
+        with patch.object(b, "run", side_effect=AssertionError), patch.object(b, "demo", side_effect=AssertionError):
+            for command in ("cache", "fetch"):
+                code, result = self.cli(command, "--auto-demo", "--config", str(default))
+                self.assertEqual((code, result["error"]), (1, "invalid_config"))
+
+    def test_auto_demo_invalid_default_is_not_absent(self):
+        path = self.config_file({}, default=True)
+        with patch.object(b, "run", side_effect=AssertionError), patch.object(b, "demo", side_effect=AssertionError):
+            for raw, mode in (("{", 0o600), ("[]", 0o600), ('{"timezone":"invalid"}', 0o600),
+                              ('{"url":"http://remote.invalid"}', 0o600), ("{}", 0o644)):
+                path.write_text(raw)
+                path.chmod(mode)
+                for command in ("fetch", "cache"):
+                    with self.subTest(raw=raw, mode=mode, command=command):
+                        code, result = self.cli(command, "--auto-demo")
+                        self.assertEqual((code, result["error"]), (1, "invalid_config"))
+            path.unlink()
+            for target in (self.config_file({}), path.parent / "missing.json"):
+                path.symlink_to(target)
+                self.assertEqual(self.cli("fetch", "--auto-demo")[1]["error"], "invalid_config")
+                path.unlink()
+            path.mkdir()
+            self.assertEqual(self.cli("cache", "--auto-demo")[1]["error"], "invalid_config")
+            with patch.object(b, "private_read", side_effect=PermissionError):
+                self.assertEqual(self.cli("fetch", "--auto-demo")[1]["error"], "invalid_config")
+
+    def test_auto_demo_configured_failures_never_become_synthetic(self):
+        self.config_file({"url": self.url}, default=True)
+        with patch.object(b, "demo", side_effect=AssertionError):
+            self.assertEqual(self.cli("cache", "--auto-demo")[1]["error"], "cache_miss")
+            for error in ("network_error", "auth_error", "timeout", "query_error", "ambiguous_source"):
+                with self.subTest(error=error), patch.object(b, "request", side_effect=b.Failure(error)):
+                    code, result = self.cli("fetch", "--auto-demo")
+                    self.assertEqual((code, result["status"], result["error"]), (1, "error", error))
+                    self.assertTrue(all(m["value"] is None for m in result["metrics"].values()))
+            with patch.object(b, "cache_location", side_effect=b.Failure("cache_error")):
+                self.assertEqual(self.cli("fetch", "--auto-demo")[1]["error"], "cache_error")
+
+    def test_auto_demo_rechecks_default_and_transitions_to_live(self):
+        with patch.object(b, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = NOW
+            self.assertEqual(self.cli("cache", "--auto-demo")[1]["status"], "demo")
+            self.config_file({"url": self.url}, default=True)
+            type(self).http_status = 401
+            code, failed = self.cli("fetch", "--auto-demo")
+            self.assertEqual((code, failed["status"], failed["error"]), (1, "error", "auth_error"))
+            self.assertIsNone(failed["device"])
+            type(self).http_status = 200
+            code, live = self.cli("fetch", "--auto-demo")
+            self.assertEqual((code, live["status"], live["device"]["source"]), (0, "ok", "Device"))
+            self.assertEqual(self.cli("cache", "--auto-demo")[1]["status"], "cached")
+            type(self).http_status = 401
+            code, cached = self.cli("fetch", "--auto-demo")
+            self.assertEqual((code, cached["status"], cached["error"]), (0, "cached", "auth_error"))
+            self.assertEqual(cached["metrics"], live["metrics"])
+
+    def test_direct_cli_keeps_implicit_defaults_and_doctor_is_never_synthetic(self):
+        with patch.object(b, "run", return_value=b.empty(NOW, "UTC", "ok")) as run, \
+                patch.object(b, "demo", side_effect=AssertionError):
+            for command in ("fetch", "cache", "doctor"):
+                self.assertEqual(self.cli(command)[0], 0)
+                self.assertEqual(run.call_args.args[:2], (command, b.DEFAULTS))
+        self.assertIsNone(b.load_config(auto_demo=True))
+        self.config_file({}, default=True)
+        self.assertEqual(b.load_config(auto_demo=True), b.DEFAULTS)
 
     def test_private_config_and_url_policy(self):
         path = self.config_file({"url": self.url})
@@ -1377,7 +1464,7 @@ class BackendTests(unittest.TestCase):
         with patch.object(b, "request", side_effect=AssertionError):
             demo = b.demo(NOW, True)
             self.assertEqual(demo["activities"]["endDate"], "2026-09-05")
-            self.assertEqual(len(demo["activities"]["items"]), 4)
+            self.assertEqual(len(demo["activities"]["items"]), 6)
             self.assertEqual(demo["activities"]["items"][0]["id"], demo["latestActivity"]["id"])
             self.assertEqual(demo["activities"]["items"][0]["time"], demo["latestActivity"]["time"])
             self.assertIsNone(b.demo(NOW, False)["activities"])
@@ -1945,6 +2032,43 @@ class BackendTests(unittest.TestCase):
         self.assertIsNone(result["latestActivity"])
         self.assertIsNone(result["activityFetchedAt"])
         self.assertTrue(all(not points for points in result["history"].values()))
+
+    def test_demo_varied_history_and_consistent_summaries(self):
+        result = b.demo(NOW, True)
+        self.assertEqual(result, b.demo(NOW, True))
+        for series in (result["history"], result["supplementalHistory"]):
+            for points in series.values():
+                values = [point["value"] for point in points]
+                self.assertGreater(len(set(values)), 4)
+                self.assertTrue(any(left < right for left, right in zip(values, values[1:])))
+                self.assertTrue(any(left > right for left, right in zip(values, values[1:])))
+        for key in ("steps", "sleep"):
+            self.assertEqual(result["charts"][key][:-1], [
+                {"date": point["date"], "value": point["value"]} for point in result["history"][key][1:]])
+            self.assertEqual(result["charts"][key][-1]["value"], result["metrics"][key]["value"])
+        for key, series in (("bodyBattery", result["charts"]["bodyBattery"]), ("stress", result["stressSeries"])):
+            self.assertEqual(len(series), 289)
+            self.assertTrue(all(0 <= point["value"] <= 100 for point in series))
+            metric = result["metrics" if key == "bodyBattery" else "wellness"][key]
+            self.assertEqual(series[-1], {"time": metric["time"], "value": metric["value"]})
+        latest = result["latestActivity"]
+        for key in ("id", "time", "type", "durationSeconds", "distanceMeters", "calories"):
+            self.assertEqual(result["activities"]["items"][0][key], latest[key])
+        self.assertGreater(len({item["type"] for item in result["activities"]["items"]}), 3)
+
+    def test_demo_times_stay_in_past_across_midnight_and_dst(self):
+        for date in ("2026-09-05", "2026-03-29", "2026-10-25"):
+            for hour in (0, 1, 6, 7, 12, 23):
+                now = b.timestamp(f"{date}T{hour:02d}:00:00Z")
+                with self.subTest(now=now):
+                    result = b.demo(now, True)
+                    for metric in (*result["metrics"].values(), *result["wellness"].values()):
+                        self.assertLessEqual(b.timestamp(metric["time"]), now)
+                        self.assertEqual(metric["state"], "fresh")
+                    for item in result["activities"]["items"]:
+                        self.assertLessEqual(b.timestamp(item["time"]) + timedelta(seconds=item["durationSeconds"]), now)
+                    points = result["charts"]["bodyBattery"]
+                    self.assertEqual(b.timestamp(points[-1]["time"]) - b.timestamp(points[0]["time"]), timedelta(days=1))
 
 
     def wellness_fixture(self, now=NOW, readiness_error=False):

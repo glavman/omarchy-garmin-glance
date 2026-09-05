@@ -13,7 +13,7 @@ FocusScope {
   property string intent: ""
   property int days: 7
   property bool confirmingClear: false
-  readonly property bool live: !!service && !service.demoMode
+  readonly property bool live: !!service && !service.demoMode && service.actionsBlocked !== true
   readonly property bool busy: !!service && service.coachBusy
   readonly property string agent: service ? service.coachAgent : ""
   readonly property bool canOpen: expanded && live && !busy && !confirmingClear && ["day", "week", "question"].indexOf(intent) >= 0

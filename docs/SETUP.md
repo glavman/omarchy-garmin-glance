@@ -19,6 +19,25 @@ timezone data, and InfluxDB **1.x using InfluxQL**. Version 1.11 was tested.
 InfluxDB 2.x/3.x and Grafana-proxy transport are not supported in this release.
 Pin your container versions rather than using an unqualified `latest` tag.
 
+## Preview Before Connecting
+
+With no default `connection.json`, the plugin shows realistic, clearly labelled
+synthetic demo data without querying a database or reading/writing its data cache.
+Configured connections stay live: a bad config or an outage is never hidden by
+switching to demo data. The `demoMode` widget setting can also force a preview.
+Older installs that relied on implicit localhost defaults without a connection
+file now show the preview too. Follow this guide to create a private, explicit
+connection with verified authentication and a dedicated READ-only account.
+
+Click **Set up live data** or press **S** inside the plugin for the README's
+copyable agent prompt and a link to this guide. Copying does not launch an agent
+or send credentials. No setup actions run automatically.
+
+After completing and verifying the setup below, refresh the plugin. If you
+explicitly enabled **Synthetic demo data** in widget settings, turn it off first.
+An automatically selected preview checks for the connection file on each refresh.
+Coach and Grafana/activity actions are disabled while previewing.
+
 ## Agent-Assisted Setup
 
 If garmin-grafana is already collecting your data, you can ask your Omarchy

@@ -1,6 +1,6 @@
 # Garmin Glance
 
-**Your Garmin day in Omarchy, without another Garmin login.**
+**Your Garmin health and activities, at a glance in Omarchy.**
 
 - **A glance, not another dashboard tab.** Steps, sleep, HRV, resting HR and
   stress, with seven-day averages/history and a Body Battery/stress overlay.
@@ -12,10 +12,11 @@
 
 Garmin Glance reads the **InfluxDB database of your existing
 [garmin-grafana](https://github.com/arpanghosh8453/garmin-grafana) stack**, not the
-Grafana HTTP API. It reuses your collector instead of adding a second Garmin
-login or cloud scraper. Watch sync, Garmin authentication and imports remain
-with your existing watch/Connect/collector workflow; refresh only queries InfluxDB.
-Connect links use your browser session, with **no Garmin authentication in the plugin**.
+Grafana HTTP API. It reuses your collector rather than fetching from Garmin directly;
+refresh only queries InfluxDB. **The collector still needs Garmin authentication**
+and remains responsible for imports from Connect. Opening activity links may also
+require signing into Garmin Connect in your browser. The plugin itself does not
+handle Garmin credentials.
 
 ## Set It Up
 

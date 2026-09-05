@@ -38,6 +38,10 @@ TestCase {
     background.height = row.h
     icon.ink = row.ink
     icon.kind = "generic"
+    icon.visible = false
+    wait(30)
+    var empty = grabImage(background)
+    icon.visible = true
     wait(30)
     var fallback = grabImage(background)
     icon.kind = "unknown"
@@ -54,17 +58,20 @@ TestCase {
         verify(!image.equals(images[previous]), kinds[i] + " differs from " + kinds[previous])
 
       var painted = 0
-      var offsetX = (row.w - Math.min(row.w, row.h)) / 2
-      var offsetY = (row.h - Math.min(row.w, row.h)) / 2
-      for (var y = 0; y < row.h; y++) {
-        for (var x = 0; x < row.w; x++) {
-          if (image.pixel(x, y) === background.color) continue
+      // grabImage and pixel() use physical pixels, not the item's logical size.
+      var offsetX = (image.width - Math.min(image.width, image.height)) / 2
+      var offsetY = (image.height - Math.min(image.width, image.height)) / 2
+      for (var y = 0; y < image.height; y++) {
+        for (var x = 0; x < image.width; x++) {
+          // Fractional-DPR crops can include a rounded edge outside the rectangle.
+          if (image.pixel(x, y) === empty.pixel(x, y)) continue
           painted++
-          verify(x >= offsetX && x < row.w - offsetX && y >= offsetY && y < row.h - offsetY,
+          verify(x >= offsetX && x < image.width - offsetX && y >= offsetY && y < image.height - offsetY,
             kinds[i] + " stays in the centered square")
         }
       }
-      verify(painted > 20, kinds[i] + " paints visible strokes")
+      var pixelArea = (image.width / row.w) * (image.height / row.h)
+      verify(painted / pixelArea > 20, kinds[i] + " paints visible strokes")
       images.push(image)
     }
   }

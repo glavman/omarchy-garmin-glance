@@ -11,6 +11,7 @@ Ui.Panel {
   property Item anchorItem: null
   property var hostWidget: null
   property var service: null
+  readonly property real stepGoal: { var n = Number(setting("stepGoal", 10000)); return isFinite(n) && n > 0 ? n : 10000 }
   property bool showDetails: false
   property bool cursorActive: false
   property string focusSection: "stats"
@@ -154,7 +155,7 @@ Ui.Panel {
     if (reveal) { revealGuard.restart(); keys.forceActiveFocus(); Qt.callLater(revealCursor) }
   }
   function hoverCursor(section, index) {
-    if (!revealGuard.running) setCursor(section, index, false)
+    if (!coach.expanded && !revealGuard.running) setCursor(section, index, false)
   }
   function cursorItem() {
     if (focusSection === "stats") return statRows.itemAt(focusIndex)
@@ -171,7 +172,7 @@ Ui.Panel {
   }
   function revealCursor() {
     var item = cursorItem()
-    if (!cursorActive || !item) return
+    if (coach.expanded || !cursorActive || !item) return
     // Scrolling moves items under a stationary pointer; don't let that steal the cursor.
     revealGuard.restart()
     var top = item.mapToItem(content, 0, 0).y, bottom = top + item.height
@@ -229,7 +230,8 @@ Ui.Panel {
   }
   function textKey(text) {
     var key = text.toLowerCase(), index = "12345".indexOf(key)
-    if (key.length === 1 && index >= 0) selectHistory(index, true)
+    if (key === "c") coach.open()
+    else if (key.length === 1 && index >= 0) selectHistory(index, true)
     else if (key === "b") setCursor("stress", 0, true)
     else if (key === "w") setCursor("weekly", 0, true)
     else if (key === "d") toggleDetails(true)
@@ -250,9 +252,13 @@ Ui.Panel {
       focusSection = "stats"; focusIndex = 0; contextSection = "stats"; contextIndex = 0
       scroll.contentY = 0
       if (service) service.ensureCharts()
-    }
+    } else coach.dismiss()
   }
   onServiceChanged: if (opened && service) service.ensureCharts()
+  function scrollCoach(direction, page) {
+    scroll.contentY = Math.max(0, Math.min(Math.max(0, scroll.contentHeight - scroll.height),
+      scroll.contentY + direction * (page ? scroll.height * 0.8 : Style.space(60))))
+  }
   Timer { id: revealGuard; interval: 100 }
 
   Ui.KeyboardPanel {
@@ -263,14 +269,18 @@ Ui.Panel {
     contentHeight: fittedContentHeight(content.implicitHeight, Style.space(740))
     Ui.PanelKeyCatcher {
       id: keys
+      objectName: "garminPanelKeys"
       anchors.fill: parent
-      onCloseRequested: root.close()
+      blocked: coach.expanded || coach.activeFocus
+      Keys.forwardTo: [scrollKeys]
+      onCloseRequested: coach.expanded ? coach.dismiss() : root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
       onActivateRequested: root.activateCursor()
       onTextKey: function(text) { root.textKey(text) }
       Flickable {
         id: scroll
+        objectName: "garminPanelScroll"
         anchors.fill: parent; clip: true
         contentWidth: width; contentHeight: content.implicitHeight
         boundsBehavior: Flickable.StopAtBounds
@@ -278,12 +288,22 @@ Ui.Panel {
         Column {
           id: content
           width: scroll.width; spacing: Style.spacing.panelGap
-          WatchFace {
-            width: parent.width; payload: root.payload
-            modelOverride: root.setting("watchModel", "")
-            demoMode: !!root.service && root.service.demoMode
-            ink: Color.popups.text; accent: Color.popups.text; fontFamily: Style.font.family
-            textSize: Math.max(12, Style.font.body); unit: Style.spaceReal(1)
+          Row {
+            width: parent.width; spacing: Style.space(12)
+            WatchFace {
+              width: Math.max(0, parent.width - coachEntrySlot.width - parent.spacing)
+              payload: root.payload
+              modelOverride: root.setting("watchModel", "")
+              demoMode: !!root.service && root.service.demoMode
+              ink: Color.popups.text; accent: Color.popups.text; fontFamily: Style.font.family
+              textSize: Math.max(12, Style.font.body); unit: Style.spaceReal(1)
+            }
+            Item {
+              id: coachEntrySlot
+              objectName: "coachHeaderSlot"
+              width: Math.min(coach.entryButton.implicitWidth, parent.width * 0.45)
+              height: coach.entryButton.implicitHeight
+            }
           }
           Text {
             visible: text !== ""; width: parent.width; text: root.statusText
@@ -292,8 +312,22 @@ Ui.Panel {
           }
           Text {
             width: parent.width; wrapMode: Text.Wrap
-            text: "J/K: navigate / H/L: choose or inspect / Enter: activate\n1-5: history / B: overlay / W: weekly / O: open context"
+            text: "J/K: navigate / H/L: choose or inspect / Enter: activate\n1-5: history / B: overlay / W: weekly / O: open context / C: coach"
             color: Color.popups.text; opacity: 0.65; font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
+          }
+          Coach {
+            id: coach
+            objectName: "garminPanelCoach"
+            width: parent.width; service: root.service; stepGoal: root.stepGoal
+            entryContainer: coachEntrySlot
+            onDismissed: keys.forceActiveFocus()
+            onScrollRequested: function(direction, page) { root.scrollCoach(direction, page) }
+            onFocusMoved: function(item) {
+              var top = item.mapToItem(content, 0, 0).y
+              if (top < scroll.contentY) scroll.contentY = top
+              else if (top + item.height > scroll.contentY + scroll.height)
+                scroll.contentY = Math.max(0, Math.min(scroll.contentHeight - scroll.height, top + item.height - scroll.height))
+            }
           }
           Column {
             width: parent.width; spacing: Style.space(10)
@@ -663,9 +697,22 @@ Ui.Panel {
           }
           Text {
             width: parent.width; wrapMode: Text.Wrap
-            text: "Up/Down, J/K: navigate / Left/Right, H/L: choose or inspect\nEnter/Space: activate / 1-5: history / B: overlay / D: details\nW: weekly / A: latest in Connect / O: context / G: Grafana\nR: refresh / Tab/Shift-Tab: panels / Esc: close"
+            text: "Up/Down, J/K: navigate / Left/Right, H/L: choose or inspect\nEnter/Space: activate / 1-5: history / B: overlay / D: details\nW: weekly / A: latest in Connect / O: context / G: Grafana\nC: coach / R: refresh / Tab/Shift-Tab: panels / Esc: close"
             color: Color.popups.text; opacity: 0.65; font.family: Style.font.family; font.pixelSize: Style.font.bodySmall
           }
+        }
+      }
+      Item {
+        id: scrollKeys
+        // Consent can outlive focus on a button; never route its scroll keys through section navigation.
+        Keys.onPressed: function(event) {
+          if (!keys.blocked) return
+          if (event.key === Qt.Key_Escape) { coach.dismiss(); event.accepted = true; return }
+          var direction = event.key === Qt.Key_Down || event.key === Qt.Key_PageDown ? 1
+            : event.key === Qt.Key_Up || event.key === Qt.Key_PageUp ? -1 : 0
+          if (!direction) return
+          root.scrollCoach(direction, event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp)
+          event.accepted = true
         }
       }
     }

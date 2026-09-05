@@ -14,8 +14,9 @@ def copy_package(source, staging):
     """Copy only reviewed package files, never local data or linked inputs."""
     files = [
         "manifest.json", "Service.qml", "BarWidget.qml", "Panel.qml",
-        "Chart.qml", "MetricCard.qml", "WatchFace.qml", "WatchIcon.qml", "ActivityIcon.qml", "StressChart.qml", "Model.js", "Grafana.js", "backend.py",
-        "README.md", "LICENSE", "install.py",
+        "Chart.qml", "MetricCard.qml", "Coach.qml", "WatchFace.qml", "WatchIcon.qml",
+        "ActivityIcon.qml", "StressChart.qml", "Model.js", "Grafana.js", "backend.py",
+        "coach.py", "coach_data.py", "COACH.md", "README.md", "LICENSE", "install.py",
     ]
     if source.is_symlink() or (source / "docs").is_symlink():
         raise ValueError("Refusing to copy a symlinked package directory.")
@@ -75,7 +76,7 @@ def main():
             raise SystemExit("Plugin copied, but discovery timed out. Rescan and enable it manually.")
         time.sleep(0.2)
     subprocess.run(["omarchy", "plugin", "enable", plugin_id], check=True)
-    print("Installed Garmin Glance 1.0.0. Click the Garmin metric in the bar.")
+    print("Installed Garmin Glance 1.0.0. Click the watch icon in the bar.")
     print("When updating an already loaded version, run: omarchy restart shell")
 
 

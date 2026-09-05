@@ -15,6 +15,86 @@ timezone data, and InfluxDB **1.x using InfluxQL**. Version 1.11 was tested.
 InfluxDB 2.x/3.x and Grafana-proxy transport are not supported in this release.
 Pin your container versions rather than using an unqualified `latest` tag.
 
+## Agent-Assisted Setup
+
+If garmin-grafana is already collecting your data, you can ask your Omarchy
+agent to perform the connection setup instead of following every command
+manually. This assumes your agent has the Omarchy skill available. The skill
+covers desktop integration; the database-specific instructions are in this
+guide. The agent should read both rather than assume your stack matches the
+upstream defaults.
+
+Paste the following into your agent. Optionally add your existing stack's
+directory, local/remote host information and preferred IANA timezone. If you
+do not know them, let the agent inspect or ask. **Do not paste credentials or
+health records into the conversation.**
+
+```text
+Set up Garmin Glance on this Omarchy machine using my existing garmin-grafana
+installation. Load the Omarchy skill and read these current instructions:
+https://github.com/glavman/omarchy-garmin-glance/blob/main/docs/SETUP.md
+https://github.com/glavman/omarchy-garmin-glance/blob/main/README.md
+
+1. Inspect before changing anything. Locate the existing Compose deployment
+   or ask me where it runs. Confirm the Omarchy plugin interface, InfluxDB
+   version, database name, authentication state, reachable endpoint and source
+   timezone. If the database is InfluxDB 2/3, stop and explain the incompatibility;
+   do not downgrade, replace or recreate it. If Garmin data is not being
+   collected yet, explain that prerequisite rather than pretending it works.
+
+2. Explain any required stack changes and get my approval before changing
+   accounts/grants, network exposure, stopping containers or restarting the
+   desktop shell. Back up affected configuration and, before an authentication
+   migration, the database including metadata. Preserve the Compose project
+   name, volumes, mount paths, existing users, Garmin tokens and working clients.
+   Never run docker compose down -v or the upstream initial installer.
+
+3. Follow the appropriate authenticated/default-stack branch of the guide.
+   The plugin reads InfluxDB directly; it needs no Grafana API token, Garmin
+   password or new Garmin collector. Use a dedicated non-admin READ-only user.
+   Ensure authentication is actually enabled. Keep local database access on
+   loopback only; remote access needs trusted HTTPS and restricted networking.
+   Do not weaken existing security or grant the plugin Docker/root access.
+
+4. Handle secrets locally without returning their contents to the agent/chat.
+   Use hidden interactive prompts or private files and redacted diagnostics.
+   Never put passwords in command arguments, URLs, shell history, source code
+   or shell.json. Do not print expanded Compose configuration, container
+   environments, raw query results, Garmin tokens or health data. Ask me to
+   enter any required administrator credentials through a local secure prompt.
+
+5. Create or carefully update this owner-only file (directory 0700, file 0600):
+   ~/.config/omarchy-garmin-glance/connection.json
+   Set the endpoint, database, reader credentials and confirmed IANA timezone.
+   Use source tags only if needed; do not treat tags as access controls.
+   Review the plugin source, install from:
+   https://github.com/glavman/omarchy-garmin-glance.git
+   Then run its doctor diagnostic and enable io.github.glavman.garmin-glance.
+   Preserve unrelated Omarchy settings; never edit /usr/share/omarchy/.
+
+6. Verify anonymous database queries are denied and the plugin account is
+   non-admin with only READ on the intended database. Check existing Grafana
+   and collector access still works. Open the plugin and check
+   `omarchy-shell garmin-glance status`: demo must be false, with no connection
+   error and charts loaded. Explain missing/stale device metrics honestly;
+   doctor deliberately redacts metric values, and SELECT success alone does
+   not prove read-only permissions. Do not write health data to test access.
+
+Finish with a short summary of changes, backup locations, verification results
+and anything still blocked. Do not reveal credentials or health measurements,
+commit/push files, or publish screenshots. If approval or secure credential
+entry is unavailable, stop that step and tell me what to do locally.
+```
+
+This is a setup request, not an unattended installer. Expect the agent to ask
+for confirmation when your existing database needs an authentication migration
+or a restart. Review its proposed changes before approving them. It should
+leave your existing collector responsible for Garmin login and synchronization.
+
+The numbered sections below are the manual reference for both you and the
+agent. If your stack is already authenticated and reachable, most of the
+bootstrap work can be skipped; do not run it again unnecessarily.
+
 ## 1. Set Up Garmin Grafana
 
 If you already have fresh data appearing in Grafana, continue to step 2.

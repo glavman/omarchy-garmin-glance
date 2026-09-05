@@ -28,6 +28,36 @@ Maintainers: see the [public-release and marketplace checklist](docs/PUBLISHING.
 
 ## Install And Update
 
+### Ask Your Agent
+
+Already have garmin-grafana running? Your Omarchy agent can inspect the stack
+and set up the connection for you. Paste this prompt into your agent:
+
+```text
+Install Garmin Glance on my Omarchy machine and connect it to my existing
+garmin-grafana stack. Use your Omarchy skill and follow the current setup guide:
+https://github.com/glavman/omarchy-garmin-glance/blob/main/docs/SETUP.md
+
+Inspect my setup first; ask where the stack runs if you cannot find it.
+Use direct read-only InfluxDB 1.x access, not Grafana's API or Garmin login.
+Preserve existing data, volumes, collector settings and Garmin tokens.
+Ask before changing database accounts, network exposure or restarting services.
+Keep all credentials and health data out of chat, logs and Git; use secure
+local prompts/files for secrets, never ask me to paste passwords into chat.
+
+Configure the private connection file, install and enable the plugin, then
+verify database permissions, collector/Grafana health and the plugin's live
+status. Report what changed and anything I still need to do, without health
+values or secrets.
+```
+
+If known, add your stack's directory, whether it runs locally or remotely, and
+your timezone. Do not include passwords. For the full prompt and expected
+checks, see [agent-assisted setup](docs/SETUP.md#agent-assisted-setup).
+Your agent may need you to approve privileged operations in a local terminal.
+
+### Manual Installation
+
 After completing [connection setup](docs/SETUP.md), install from the public repo:
 
 ```bash

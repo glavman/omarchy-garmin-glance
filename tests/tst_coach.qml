@@ -242,6 +242,7 @@ TestCase {
       if (typeof object.write === "function" && !workerUnderTest) workerUnderTest = object
     }
     verify(workerUnderTest !== null)
+    real.payload = {schemaVersion: 1, status: "ok"}
     var checked = '{"schemaVersion":1,"status":"ok","error":null,"agent":"grok"}'
     var ok = '{"schemaVersion":1,"status":"ok","error":null}'
     var cases = [

@@ -28,7 +28,9 @@ Item {
     if (!loc.found) return ({})
     return loc.kind === "bar" ? config.bar.layout[loc.section][loc.index] : loc.kind === "plugin" ? config.plugins[loc.index] : ({})
   }
-  readonly property bool demoMode: settings.demoMode === true
+  readonly property bool requestedDemoMode: settings.demoMode === true
+  readonly property bool demoMode: requestedDemoMode || (!!payload && payload.status === "demo")
+  readonly property bool actionsBlocked: demoMode || !payload
   readonly property int refreshMinutes: Math.max(1, Math.min(60, Number(settings.refreshMinutes) || 5))
 
   property string coachOperation: ""
@@ -66,7 +68,7 @@ Item {
     }
   }
   function coachExecute(command, input) {
-    if (demoMode || coachBusy) return false
+    if (actionsBlocked || coachBusy) return false
     coachOperation = command
     coachInput = input ? JSON.stringify(input) + "\n" : ""
     coachResult = null
@@ -80,12 +82,12 @@ Item {
     return true
   }
   function checkCoach() {
-    if (demoMode || coachBusy) return false
+    if (actionsBlocked || coachBusy) return false
     coachAgent = ""
     return coachExecute("check", null)
   }
   function launchCoach(intent, days, stepGoal, agent) {
-    if (demoMode || coachBusy || ["opencode", "claude", "codex", "grok"].indexOf(agent) < 0 || agent !== coachAgent
+    if (actionsBlocked || coachBusy || ["opencode", "claude", "codex", "grok"].indexOf(agent) < 0 || agent !== coachAgent
         || ["day", "week", "question"].indexOf(intent) < 0 || [7, 30, 90].indexOf(days) < 0
         || typeof stepGoal !== "number" || !isFinite(stepGoal) || stepGoal <= 0) return false
     return coachExecute("launch", {intent: intent, days: days, stepGoal: stepGoal, agent: agent})
@@ -96,7 +98,7 @@ Item {
     coachWatchdog.stop()
     var operation = coachOperation
     var result = coachResult
-    if (!result && !demoMode) {
+    if (!result && !actionsBlocked) {
       try {
         var response = JSON.parse(coachOutput)
         if (response && response.schemaVersion === 1 && ["ok", "error"].indexOf(response.status) >= 0
@@ -110,7 +112,7 @@ Item {
     coachInput = ""
     coachOutput = ""
     coachResult = null
-    if (demoMode) { coachAgent = ""; coachMessage = ""; return }
+    if (actionsBlocked) { coachAgent = ""; coachMessage = ""; return }
     if (operation === "check" || operation === "launch") coachAgent = ""
     if (!result) { coachMessage = coachError("invalid_response"); return }
     if (result.status === "error") { coachMessage = coachError(result.error); return }
@@ -137,7 +139,7 @@ Item {
   Process {
     id: coachWorker
     onStarted: {
-      if (root.demoMode || !root.coachOperation) { signal(9); return }
+      if (root.actionsBlocked || !root.coachOperation) { signal(9); return }
       if (root.coachOperation === "launch") {
         write(root.coachInput)
         root.coachInput = ""
@@ -149,7 +151,7 @@ Item {
       // Empty delimiter delivers chunks without retaining a previous stream or an unbounded line.
       splitMarker: ""
       onRead: function(data) {
-        if (!root.coachOperation || root.demoMode) return
+        if (!root.coachOperation || root.actionsBlocked) return
         if (root.coachOutput.length + data.length > 4096) {
           root.coachResult = {status: "error", error: "response_too_large"}
           if (coachWorker.processId > 0) coachWorker.signal(9)
@@ -166,7 +168,8 @@ Item {
     requestCharts = charts
     var args = ["/usr/bin/python3", decodeURIComponent(Qt.resolvedUrl("backend.py").toString().replace(/^file:\/\//, "")), command]
     if (charts) args.push("--charts")
-    if (demoMode && command === "fetch") args.push("--demo")
+    if (requestedDemoMode && command === "fetch") args.push("--demo")
+    else if (command === "cache" || command === "fetch") args.push("--auto-demo")
     worker.command = args
     worker.running = true
   }
@@ -188,13 +191,13 @@ Item {
     message = ""
     failures = 0
     pendingCharts = false
-    initializing = !demoMode
+    initializing = !requestedDemoMode
     if (busy) { restartPending = true; worker.signal(9) }
     else execute(initializing ? "cache" : "fetch", true)
   }
   function openGrafana(context) {
-    if (context !== undefined && demoMode) {
-      message = "Context links are unavailable for demo data."
+    if (actionsBlocked) {
+      message = demoMode ? "Grafana links are unavailable for demo data." : "Waiting for the data source before opening links."
       return
     }
     var link = Grafana.build(String(settings.grafanaUrl || "http://127.0.0.1:3000"), payload, context)
@@ -203,21 +206,24 @@ Item {
     Quickshell.execDetached(["/usr/bin/xdg-open", link.url])
   }
   function openActivity(id) {
-    if (demoMode) { message = "Activity links are unavailable for demo data."; return }
+    if (actionsBlocked) {
+      message = demoMode ? "Activity links are unavailable for demo data." : "Waiting for the data source before opening links."
+      return
+    }
     var url = Model.activityUrl(id)
     if (!url) { message = "This activity has no valid Garmin Connect ID. Refresh to try again."; return }
     message = ""
     Quickshell.execDetached(["/usr/bin/xdg-open", url])
   }
-  onDemoModeChanged: {
+  onActionsBlockedChanged: {
     coachAgent = ""
     coachMessage = ""
-    if (demoMode && coachOperation) {
+    if (actionsBlocked && coachOperation) {
       if (coachWorker.processId > 0) coachWorker.signal(9)
       finishCoach(-1, 1)
     }
-    if (shell) startup.restart()
   }
+  onRequestedDemoModeChanged: if (shell) startup.restart()
   Component.onCompleted: startup.start()
   Timer { id: startup; interval: 250; onTriggered: root.reset() }
   Timer { interval: 60000; running: true; repeat: true; onTriggered: root.now = Date.now() }
@@ -241,9 +247,12 @@ Item {
           var result = JSON.parse(text)
           if (!Model.valid(result)) throw new Error("contract")
           root.accepted = true
+          // Auto demo needs no immediate live retry; the normal refresh rechecks config.
+          if (result.status === "demo") root.initializing = false
           if (root.initializing && result.status === "error") return
           // Keep a usable in-memory snapshot if even the backend cache is unavailable.
-          if (result.status !== "error" || !root.payload) root.payload = result
+          // Synthetic values must never survive a failed transition to a real source.
+          if (result.status !== "error" || !root.payload || root.payload.status === "demo") root.payload = result
           root.message = Model.errorMessage(result.error)
           root.failures = result.error ? Math.min(root.failures + 1, 4) : 0
         } catch (error) {
@@ -255,7 +264,9 @@ Item {
       root.now = Date.now()
       if (root.restartPending) { root.restartPending = false; Qt.callLater(root.reset); return }
       if (!root.accepted && !root.initializing) {
-        root.message = root.timedOut ? "Database request timed out. Showing last available data." : "Data helper failed. Showing last available data."
+        if (!root.requestedDemoMode && root.payload && root.payload.status === "demo") root.payload = null
+        root.message = (root.timedOut ? "Database request timed out." : "Data helper failed.")
+          + (root.payload ? " Showing last available data." : " No data available.")
         root.failures = Math.min(root.failures + 1, 4)
       }
       if (root.initializing) { root.initializing = false; Qt.callLater(function() { root.refresh(root.wantCharts) }) }

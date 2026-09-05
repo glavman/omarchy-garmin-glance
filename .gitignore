@@ -43,3 +43,8 @@ health-data/
 *.webp
 # Only deliberately reviewed demo artwork belongs in the public package.
 !preview.png
+!docs/screenshots/
+docs/screenshots/*
+!docs/screenshots/dashboard.png
+!docs/screenshots/activities.png
+!docs/screenshots/latest-activity.png

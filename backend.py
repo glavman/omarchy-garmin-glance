@@ -122,7 +122,8 @@ def private_read(path, limit):
     return decode(raw)
 
 
-def load_config(path=None):
+def load_config(path=None, *, auto_demo=False):
+    """Return None only for an absent default config when explicitly opted in."""
     explicit = path is not None
     path = Path(path) if path is not None else Path.home() / ".config/omarchy-garmin-glance/connection.json"
     config = copy.deepcopy(DEFAULTS)
@@ -133,6 +134,8 @@ def load_config(path=None):
             # An explicitly requested config must exist.
             if explicit:
                 raise ValueError("missing")
+            if auto_demo:
+                return None
             supplied = {}
         if not isinstance(supplied, dict) or supplied.keys() - DEFAULTS.keys():
             raise ValueError("config")
@@ -1127,50 +1130,98 @@ def demo(now, charts):
     result = empty(now, DEFAULTS["timezone"], "demo")
     result["device"] = {"name": "Forerunner 965", "source": "demo"}
     zone = ZoneInfo(result["timezone"])
-    for key, value in {"bodyBattery": 73, "steps": 4321, "sleep": 82, "hrv": 48}.items():
-        when = now - timedelta(hours=8) if key in ("sleep", "hrv") else now
+    today = now.astimezone(zone).date()
+    history = {
+        "bodyBattery": [78, 91, 85, 67, 81, 88, 92],
+        "steps": [8247, 10683, 7132, 11896, 6421, 9358, 12846],
+        "sleep": [76, 88, 83, 69, 81, 87, 84],
+        "hrv": [43, 51, 48, 39, 46, 53, 50],
+        "sleepDuration": [25920, 29580, 27660, 22800, 26820, 29100, 28200],
+        "restingHeartRate": [54, 49, 51, 57, 53, 48, 50],
+        "trainingReadiness": [62, 86, 74, 42, 67, 83, 79],
+        "stress": [31, 22, 27, 43, 29, 24, 26],
+    }
+    # Local-hour anchors keep refreshes stable and give the day a sleep/work/rest rhythm.
+    profiles = {
+        "bodyBattery": [(0, 24), (2, 43), (4, 66), (7, 92), (9, 84), (12, 65),
+                        (13, 63), (16, 47), (18, 34), (21, 23), (23, 18), (24, 24)],
+        "stress": [(0, 12), (3, 8), (6, 11), (7, 18), (9, 36), (11, 48),
+                   (13, 19), (15, 42), (17, 32), (19, 24), (21, 17), (24, 12)],
+        "steps": [(0, 0), (6, 0), (7, 284), (9, 1826), (12, 3618), (13, 5427),
+                  (16, 6732), (18, 8249), (20, 10386), (22, 11274), (24, 11312)],
+    }
+
+    def sample(key, when):
+        local = when.astimezone(zone)
+        hour = local.hour + local.minute / 60 + local.second / 3600
+        for (start, low), (end, high) in zip(profiles[key], profiles[key][1:]):
+            if start <= hour < end:
+                value = low + (high - low) * (hour - start) / (end - start)
+                if key == "stress":
+                    slot = local.hour * 12 + local.minute // 5
+                    value += ((slot * 17 + slot * slot * 3) % 23 - 11) * (0.35 if hour < 7 else 1)
+                    if slot in (112, 113, 135, 179, 180, 203):
+                        value += 24
+                return round(max(0, min(100, value)) if key != "steps" else value)
+
+    wake = datetime.combine(today, time(7), zone)
+    if wake > now:
+        wake -= timedelta(days=1)
+    sleep_values = {"sleep": 86, "hrv": 52, "sleepDuration": 28500}
+    if wake.date() != today:
+        sleep_values = {key: history[key][-1] for key in sleep_values}
+    for key, value in {"bodyBattery": sample("bodyBattery", now), "steps": sample("steps", now),
+                       "sleep": sleep_values["sleep"], "hrv": sleep_values["hrv"]}.items():
+        when = wake if key in ("sleep", "hrv") else now
         result["metrics"][key].update(value=value, time=iso(when), date=when.astimezone(zone).date().isoformat())
-    for key, value in {"sleepDuration": 28800, "restingHeartRate": 52, "trainingReadiness": 78, "stress": 23}.items():
-        when = now - timedelta(hours=8) if key == "sleepDuration" else now
+    for key, value in {"sleepDuration": sleep_values["sleepDuration"], "restingHeartRate": 49,
+                       "trainingReadiness": 82, "stress": sample("stress", now)}.items():
+        when = wake if key == "sleepDuration" else now
         result["wellness"][key].update(value=value, time=iso(when))
     result["wellnessFetchedAt"] = iso(now)
     refresh_states(result, now)
-    result["latestActivity"] = {"id": "9000000000000001", "time": iso(now - timedelta(hours=2)), "type": "Running",
-                                "durationSeconds": 1800, "distanceMeters": 5000,
-                                "calories": 350, "bmrCalories": 40,
-                                **dict(zip(ACTIVITY_DETAILS, (142, 168, 1750, 2.8, 4.1, 35, 32, 3.2, 1.1, 85)))}
+    result["latestActivity"] = {
+        "id": "9000000000000001", "time": iso(datetime.combine(today - timedelta(days=1), time(17, 40), zone)),
+        "type": "Running", "durationSeconds": 2538, "distanceMeters": 7520,
+        "calories": 526, "bmrCalories": 49,
+        **dict(zip(ACTIVITY_DETAILS, (148, 172, 2496, 3.013, 4.62, 68, 64, 3.4, 0.8, 112)))}
     result["activityFetchedAt"] = iso(now)
     if charts:
+        sessions = [
+            (1, time(17, 40), "Running", 2538, 7520, 526),
+            (2, time(12, 15), "Walking", 2142, 2840, 156),
+            (3, time(18, 10), "Cycling", 4680, 28400, 684),
+            (4, time(7, 30), "Strength Training", 2760, 0, 238),
+            (5, time(8, 20), "Running", 1872, 5180, 362),
+            (6, time(10, 5), "Hiking", 5820, 6730, 472),
+        ]
         result["activities"] = activities_bundle([
-            {"ActivityID": "900000000000000" + str(n + 1),
-             "time": result["latestActivity"]["time"] if n == 0 else iso(now - timedelta(days=n)),
-             "activityType": "Running" if n % 2 == 0 else "Walking", "elapsedDuration": 1800 + n * 300,
-             "distance": 5000 if n % 2 == 0 else 2500, "calories": 350 if n % 2 == 0 else 150}
-            for n in (0, 1, 3, 6)], now, zone)
+            {"ActivityID": "900000000000000" + str(index + 1),
+             "time": iso(datetime.combine(today - timedelta(days=days), start, zone)),
+             "activityType": kind, "elapsedDuration": duration, "distance": distance, "calories": calories}
+            for index, (days, start, kind, duration, distance, calories) in enumerate(sessions)], now, zone)
         result["activitiesFetchedAt"] = iso(now)
         result["supplementalHistoryFetchedAt"] = iso(now)
         result["stressFetchedAt"] = iso(now)
-        for key, metric in result["wellness"].items():
+        for key in result["wellness"]:
             result["supplementalHistory"][key] = [
-                {"date": (now.astimezone(zone).date() - timedelta(days=n)).isoformat(),
-                 "value": metric["value"] - n} for n in range(7, 0, -1)]
+                {"date": (today - timedelta(days=7 - index)).isoformat(), "value": value}
+                for index, value in enumerate(history[key])]
         result["stressSeries"] = [
-            {"time": iso(now - timedelta(minutes=n * 5)),
-             "value": None if n == 100 else round(25 + 20 * math.sin(n / 288 * 2 * math.pi), 1)}
+            {"time": iso(now - timedelta(minutes=n * 5)), "value": sample("stress", now - timedelta(minutes=n * 5))}
             for n in range(288, -1, -1)]
         result["historyFetchedAt"] = iso(now)
-        for key, value in (("bodyBattery", 90), ("steps", 9000), ("sleep", 82), ("hrv", 48)):
+        for key in result["metrics"]:
             result["history"][key] = [
-                {"date": (now.astimezone(zone).date() - timedelta(days=n)).isoformat(), "value": value - n}
-                for n in range(7, 0, -1)]
+                {"date": (today - timedelta(days=7 - index)).isoformat(), "value": value}
+                for index, value in enumerate(history[key])]
         result["chartsFetchedAt"] = iso(now)
         result["charts"]["bodyBattery"] = [
-            {"time": iso(now - timedelta(minutes=n * 5)),
-             "value": round(55 + 18 * math.cos(n / 288 * 2 * math.pi), 1)}
+            {"time": iso(now - timedelta(minutes=n * 5)), "value": sample("bodyBattery", now - timedelta(minutes=n * 5))}
             for n in range(288, -1, -1)]
-        for key, value in (("steps", 4321), ("sleep", 82)):
-            result["charts"][key] = [{"date": (now.astimezone(zone).date() - timedelta(days=n)).isoformat(),
-                                       "value": value - n} for n in range(6, -1, -1)]
+        for key in ("steps", "sleep"):
+            result["charts"][key] = [dict(point) for point in result["history"][key][1:]] + [
+                {"date": today.isoformat(), "value": result["metrics"][key]["value"] if key == "steps" or wake.date() == today else None}]
     return source_day_bounds(result)
 
 
@@ -1187,16 +1238,22 @@ def main(argv=None):
         parser.add_argument("command", choices=("fetch", "doctor", "cache"))
         parser.add_argument("--config")
         parser.add_argument("--charts", action="store_true")
-        parser.add_argument("--demo", action="store_true")
+        mode = parser.add_mutually_exclusive_group()
+        mode.add_argument("--demo", action="store_true")
+        mode.add_argument("--auto-demo", action="store_true")
         args = parser.parse_args(argv)
-        if (args.demo and args.command != "fetch") or (args.charts and args.command == "doctor"):
+        if ((args.demo and args.command != "fetch")
+                or ((args.charts or args.auto_demo) and args.command == "doctor")):
             raise Failure("invalid_arguments")
         if args.demo:
             result = demo(now, args.charts)
         else:
-            config = load_config(args.config)
-            zone = config["timezone"]
-            result = run(args.command, config, now, args.charts)
+            config = load_config(args.config, auto_demo=args.auto_demo)
+            if config is None:
+                result = demo(now, args.charts)
+            else:
+                zone = config["timezone"]
+                result = run(args.command, config, now, args.charts)
     except Failure as exc:
         result = empty(now, zone, error=str(exc))
     except OSError:

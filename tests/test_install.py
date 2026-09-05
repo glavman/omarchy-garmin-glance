@@ -15,7 +15,7 @@ SPEC.loader.exec_module(installer)
 ROOT_FILES = (
     "manifest.json", "Service.qml", "BarWidget.qml", "Panel.qml",
     "Chart.qml", "MetricCard.qml", "Coach.qml", "WatchFace.qml", "WatchIcon.qml",
-    "ActivityIcon.qml", "StressChart.qml", "Model.js", "Grafana.js", "backend.py",
+    "ActivityIcon.qml", "StressChart.qml", "Model.js", "Grafana.js", "Setup.qml", "Setup.js", "backend.py",
     "coach.py", "coach_data.py", "COACH.md", "README.md", "LICENSE", "install.py",
 )
 PLUGIN_ID = "io.github.glavman.garmin-glance"

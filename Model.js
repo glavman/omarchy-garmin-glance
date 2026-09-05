@@ -215,6 +215,30 @@ function activityKind(type) {
   return "generic"
 }
 
+function activityIconKind(type) {
+  // Icon distinctions must not change the sport families used for metrics.
+  var key = typeof type === "string" ? type.trim().toLowerCase().replace(/[\s-]+/g, "_") : ""
+  if (/^(trail_running|ultra_run)$/.test(key)) return "trailRunning"
+  if (/^(treadmill|treadmill_running|indoor_running)$/.test(key)) return "treadmill"
+  if (/^(indoor_cycling|virtual_ride)$/.test(key)) return "indoorCycling"
+  if (key === "open_water_swimming") return "openWaterSwimming"
+  if (key === "indoor_rowing") return "indoorRowing"
+  if (key === "pilates") return "pilates"
+  if (key === "elliptical") return "elliptical"
+  if (/^(stair_climbing|floor_climbing|stair_stepper)$/.test(key)) return "stairClimbing"
+  if (/^(hiit|high_intensity_interval_training)$/.test(key)) return "hiit"
+  if (/^(snowboarding|resort_snowboarding|backcountry_snowboarding)$/.test(key)) return "snowboarding"
+  if (/^(cross_country_skiing|skate_skiing|xc_classic_skiing|xc_skate_skiing)$/.test(key)) return "crossCountrySkiing"
+  if (/^(kayaking|kayaking_v2)$/.test(key)) return "kayaking"
+  if (/^(paddleboarding|stand_up_paddleboarding|stand_up_paddle_boarding)$/.test(key)) return "paddleboarding"
+  if (key === "tennis") return "tennis"
+  if (key === "golf") return "golf"
+  if (key === "soccer") return "soccer"
+  if (key === "basketball") return "basketball"
+  if (key === "surfing") return "surfing"
+  return activityKind(type)
+}
+
 function activityName(type) {
   if (typeof type !== "string" || !type.trim()) return "Activity"
   return type.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ").toLowerCase()

@@ -330,9 +330,8 @@ source tags must match that same identity, ignoring only `ActivityID` and
 The card shows the activity type (`activityType`), date/time and elapsed duration
 (`elapsedDuration`, in seconds, formatted as minutes/hours). Distance (`distance`,
 in metres, formatted as m/km) appears only when positive and relevant to the
-recognized sport. Native monochrome QML icons cover common sports such as running,
-cycling, mountain biking, swimming, rowing, strength training and windsurfing,
-with a generic icon for unrecognized types.
+recognized sport. Both the latest-activity card and overview rows use the
+native monochrome QML [activity icons](#activity-icons) listed below.
 
 Positive `averageHR` is shown in bpm. Performance uses reported speeds in m/s,
 not distance divided by elapsed time:
@@ -381,6 +380,54 @@ history and stress series have separate fetch timestamps. Wellness and latest
 activity refresh on every fetch; history, activities overview and overlay series
 load with charts. All output is bounded. Existing version-1 caches without the
 new optional bundles load with unavailable defaults.
+
+### Activity Icons
+
+There are exactly **31 distinct sport icons**, plus a generic fallback. Aliases
+share icons; they do not add to that count. Type matching ignores case and outer
+whitespace and treats runs of spaces or hyphens as underscores.
+
+| Icon | Recognized activity types / aliases |
+|---|---|
+| Running | `running`, `track_running`, `street_running`, `virtual_run` |
+| Cycling | `cycling`, `biking`, `road_biking`, `road_cycling`, `gravel_cycling`, `e_bike_fitness`, `cyclocross`, `recumbent_cycling`, `hand_cycling`, `track_cycling` |
+| Mountain biking | `mountain_biking`, `mountainBiking`, `mountain_cycling`, `e_bike_mountain`, `bmx` |
+| Windsurfing | `wind_kite_surfing`, `windsurfing`, `wind_surfing`, `kitesurfing`, `kite_surfing` |
+| Surfing | `surfing` |
+| Rowing | `rowing` |
+| Strength | `strength`, `strength_training`, `weight_training`, `weightlifting` |
+| Walking | `walking`, `casual_walking`, `speed_walking`, `indoor_walking` |
+| Hiking | `hiking`, `mountaineering` |
+| Swimming | `swimming`, `lap_swimming`, `pool_swimming` |
+| Skiing | `skiing`, `alpine_skiing`, `backcountry_skiing`, `resort_skiing` |
+| Yoga | `yoga` |
+| Paddling | `paddling`, `canoeing` |
+| Cardio | `cardio`, `fitness_equipment`, `indoor_cardio` |
+| Trail running | `trail_running`, `ultra_run` |
+| Treadmill | `treadmill`, `treadmill_running`, `indoor_running` |
+| Indoor cycling | `indoor_cycling`, `virtual_ride` |
+| Open-water swimming | `open_water_swimming` |
+| Indoor rowing | `indoor_rowing` |
+| Pilates | `pilates` |
+| Elliptical | `elliptical` |
+| Stair climbing | `stair_climbing`, `floor_climbing`, `stair_stepper` |
+| HIIT | `hiit`, `high_intensity_interval_training` |
+| Snowboarding | `snowboarding`, `resort_snowboarding`, `backcountry_snowboarding` |
+| Cross-country skiing | `cross_country_skiing`, `skate_skiing`, `xc_classic_skiing`, `xc_skate_skiing` |
+| Kayaking | `kayaking`, `kayaking_v2` |
+| Paddleboarding | `paddleboarding`, `stand_up_paddleboarding`, `stand_up_paddle_boarding` |
+| Tennis | `tennis` |
+| Golf | `golf` |
+| Soccer | `soccer` |
+| Basketball | `basketball` |
+
+Unknown types, empty values and non-string values use the generic icon. Icons
+are selected by `activityIconKind(type)`, separately from the existing
+`activityKind(type)` sport families used for metrics. The finer icon distinctions
+do not change distance visibility or pace/speed formatting: for example,
+`trail_running` retains running pace, `indoor_cycling` retains cycling speed,
+and `snowboarding` retains skiing speed. An icon-only alias that previously had
+no metric family still has no sport-specific distance or performance display.
 
 ## Diagnostics And Tests
 

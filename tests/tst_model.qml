@@ -779,6 +779,107 @@ TestCase {
     compare(distance, ["strength", "yoga", "cardio", "generic"].indexOf(row.kind) >= 0 ? "" : "1.2 km")
   }
 
+  function test_activity_icons_data() {
+    var groups = {
+      running: ["running", "track_running", "street_running", "virtual_run"],
+      cycling: ["cycling", "biking", "road_biking", "road_cycling", "gravel_cycling", "e_bike_fitness",
+        "cyclocross", "recumbent_cycling", "hand_cycling", "track_cycling"],
+      mountainBiking: ["mountain_biking", "mountainBiking", "mountain_cycling", "e_bike_mountain", "bmx"],
+      windsurfing: ["wind_kite_surfing", "windsurfing", "wind_surfing", "kitesurfing", "kite_surfing"],
+      rowing: ["rowing"], strength: ["strength", "strength_training", "weight_training", "weightlifting"],
+      walking: ["walking", "casual_walking", "speed_walking", "indoor_walking"],
+      hiking: ["hiking", "mountaineering"], swimming: ["swimming", "lap_swimming", "pool_swimming"],
+      skiing: ["skiing", "alpine_skiing", "backcountry_skiing", "resort_skiing"],
+      yoga: ["yoga"], paddling: ["paddling", "canoeing"],
+      cardio: ["cardio", "fitness_equipment", "indoor_cardio"],
+      trailRunning: ["trail_running", "ultra_run"],
+      treadmill: ["treadmill", "treadmill_running", "indoor_running"],
+      indoorCycling: ["indoor_cycling", "virtual_ride"],
+      openWaterSwimming: ["open_water_swimming"], indoorRowing: ["indoor_rowing"],
+      pilates: ["pilates"], elliptical: ["elliptical"],
+      stairClimbing: ["stair_climbing", "floor_climbing", "stair_stepper"],
+      hiit: ["hiit", "high_intensity_interval_training"],
+      snowboarding: ["snowboarding", "resort_snowboarding", "backcountry_snowboarding"],
+      crossCountrySkiing: ["cross_country_skiing", "skate_skiing", "xc_classic_skiing", "xc_skate_skiing"],
+      kayaking: ["kayaking", "kayaking_v2"],
+      paddleboarding: ["paddleboarding", "stand_up_paddleboarding", "stand_up_paddle_boarding"],
+      tennis: ["tennis"], golf: ["golf"], soccer: ["soccer"], basketball: ["basketball"], surfing: ["surfing"]
+    }
+    var rows = []
+    for (var kind in groups)
+      for (var i = 0; i < groups[kind].length; i++) {
+        var type = groups[kind][i]
+        var variants = [type, "  " + type.toUpperCase() + "  ", type.replace(/_/g, "-"),
+          "\t" + type.replace(/_/g, " \t - ") + "\n"]
+        for (var v = 0; v < variants.length; v++)
+          rows.push({tag: type + "-" + v, type: variants[v], kind: kind,
+            fallback: ["running", "cycling", "mountainBiking", "windsurfing", "rowing", "strength",
+              "walking", "hiking", "swimming", "skiing", "yoga", "paddling", "cardio"].indexOf(kind) >= 0})
+      }
+    return rows
+  }
+
+  function test_activity_icons(row) {
+    compare(Model.activityIconKind(row.type), row.kind)
+    if (row.fallback) compare(Model.activityIconKind(row.type), Model.activityKind(row.type))
+  }
+
+  function test_activity_icon_count() {
+    var kinds = []
+    var rows = test_activity_icons_data()
+    for (var i = 0; i < rows.length; i++) {
+      var kind = Model.activityIconKind(rows[i].type)
+      if (kinds.indexOf(kind) < 0) kinds.push(kind)
+    }
+    compare(kinds.length, 31, "Aliases share exactly 31 distinct sport icons, excluding the generic fallback")
+    verify(kinds.indexOf("generic") < 0)
+  }
+
+  function test_activity_icon_unknowns_data() {
+    var values = [null, undefined, "", " \t\n", "new_unknown_sport", "toString", "__proto__",
+      "constructor", "prototype", "hasOwnProperty", "valueOf", "__defineGetter__", "trail_running_extra",
+      "not_tennis", "trail__running", "open/water/swimming", 42, 0, NaN, Infinity, true, false, {}, [],
+      ["tennis"], new String("tennis"), {toString: function() { throw new Error("Must not coerce types") }}]
+    return values.map(function(value, i) { return {tag: "unknown-" + i, type: value} })
+  }
+
+  function test_activity_icon_unknowns(row) {
+    compare(Model.activityIconKind(row.type), "generic")
+    compare(Model.activityKind(row.type), "generic")
+  }
+
+  function test_activity_icon_metrics_data() {
+    var groups = [
+      {kind: "running", types: ["trail_running", "ultra_run", "treadmill_running", "indoor_running"], pace: "8:20 /km"},
+      {kind: "cycling", types: ["indoor_cycling", "virtual_ride"], pace: "Avg 7.2 km/h - Max 10.8 km/h"},
+      {kind: "swimming", types: ["open_water_swimming"], pace: "0:50 /100m"},
+      {kind: "rowing", types: ["indoor_rowing"], pace: "4:10 /500m"},
+      {kind: "skiing", types: ["snowboarding", "resort_snowboarding", "backcountry_snowboarding",
+        "cross_country_skiing", "skate_skiing"], pace: "Avg 7.2 km/h - Max 10.8 km/h"},
+      {kind: "paddling", types: ["kayaking", "kayaking_v2", "stand_up_paddleboarding", "stand_up_paddle_boarding"], pace: ""},
+      {kind: "yoga", types: ["pilates"], pace: ""},
+      {kind: "cardio", types: ["elliptical", "stair_climbing", "floor_climbing", "hiit"], pace: ""},
+      {kind: "generic", types: ["treadmill", "stair_stepper", "high_intensity_interval_training",
+        "xc_classic_skiing", "xc_skate_skiing", "paddleboarding", "tennis", "golf", "soccer", "basketball", "surfing"], pace: ""}
+    ]
+    var rows = []
+    for (var g = 0; g < groups.length; g++)
+      for (var i = 0; i < groups[g].types.length; i++)
+        rows.push({tag: groups[g].types[i], type: groups[g].types[i], kind: groups[g].kind, pace: groups[g].pace})
+    return rows
+  }
+
+  function test_activity_icon_metrics(row) {
+    var type = "  " + row.type.toUpperCase().replace(/_/g, " - ") + "  "
+    verify(Model.activityIconKind(type) !== row.kind, "The icon is more specific than the metric family")
+    compare(Model.activityKind(type), row.kind)
+    var activity = {type: type, averageSpeed: 2, maxSpeed: 3, distanceMeters: 1234, durationSeconds: 600}
+    var distance = ["yoga", "cardio", "generic"].indexOf(row.kind) >= 0 ? "" : "1.2 km"
+    compare(Model.activityPerformance(activity), row.pace)
+    compare(Model.activityDistance(activity), distance)
+    compare(Model.activitySummary(activity), Model.activityName(type) + " - 10 min" + (distance ? " - " + distance : ""))
+  }
+
   function test_activity_formatting() {
     compare(Model.activityKind(" Indoor Cycling "), "cycling")
     compare(Model.activityName("trail_running"), "Trail Running")

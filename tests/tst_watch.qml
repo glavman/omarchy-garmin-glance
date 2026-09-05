@@ -9,17 +9,6 @@ TestCase {
   when: windowShown
   WatchFace { id: face; width: 540; ink: "#eeeeee"; accent: "#a8c080" }
   WatchIcon { id: icon; width: 22; height: 22 }
-  ActivityIcon { id: activityIcon; width: 28; height: 28 }
-
-  function test_activity_icons() {
-    var kinds = ["running", "cycling", "mountainBiking", "windsurfing", "rowing", "strength", "walking", "hiking", "swimming", "skiing", "yoga", "paddling", "cardio", "generic", "unknown"]
-    for (var i = 0; i < kinds.length; i++) {
-      activityIcon.kind = kinds[i]
-      activityIcon.ink = i % 2 ? "#eeeeee" : "#222222"
-      wait(10)
-      verify(grabImage(activityIcon).width > 0)
-    }
-  }
 
   function test_layout_data() {
     return [

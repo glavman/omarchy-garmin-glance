@@ -492,7 +492,7 @@ Ui.Panel {
                 }
                 ActivityIcon {
                   x: Style.space(4); y: Style.space(4); width: Style.space(24); height: width
-                  kind: Model.activityKind(recordedActivity.modelData.type); ink: Color.popups.text; Accessible.ignored: true
+                  kind: Model.activityIconKind(recordedActivity.modelData.type); ink: Color.popups.text; Accessible.ignored: true
                 }
                 Column {
                   id: recordedValues
@@ -537,7 +537,7 @@ Ui.Panel {
               width: parent.width; spacing: Style.space(16)
               ActivityIcon {
                 width: Style.space(28); height: width
-                kind: Model.activityKind(root.activity ? root.activity.type : "")
+                kind: Model.activityIconKind(root.activity ? root.activity.type : "")
                 ink: Color.popups.text; Accessible.ignored: true
               }
               Column {

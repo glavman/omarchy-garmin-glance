@@ -97,4 +97,9 @@ Removal leaves credentials, cache and local installer backups; it never stops th
 collector or deletes InfluxDB data. [Reference](docs/REFERENCE.md): copied installs,
 settings, diagnostics, tests and privacy details.
 
+## Contributing
+
+Pull requests are welcome, including AI-assisted contributions. See the
+[contribution guide](CONTRIBUTING.md) for development, tests and privacy expectations.
+
 [MIT licensed](LICENSE). Independent of Garmin and Omarchy; not affiliated with either.

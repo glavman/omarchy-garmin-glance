@@ -19,7 +19,7 @@ def copy_package(source, staging):
     ]
     if source.is_symlink() or (source / "docs").is_symlink():
         raise ValueError("Refusing to copy a symlinked package directory.")
-    for name in ("docs/SETUP.md", "docs/PUBLISHING.md", "docs/REFERENCE.md"):
+    for name in ("docs/SETUP.md", "docs/PUBLISHING.md", "docs/REFERENCE.md", "CONTRIBUTING.md"):
         path = source / name
         if path.is_symlink():
             raise ValueError(f"Refusing to copy a symlinked package file: {name}")

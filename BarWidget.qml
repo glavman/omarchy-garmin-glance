@@ -1,4 +1,5 @@
 import QtQuick
+import qs.Commons
 import qs.Ui as Ui
 import "Model.js" as Model
 
@@ -6,12 +7,14 @@ Ui.BarWidget {
   id: root
   moduleName: "io.github.glavman.garmin-glance"
   readonly property var service: bar && bar.shell ? bar.shell.serviceFor(moduleName) : null
-  readonly property string metricKey: ["bodyBattery", "steps", "sleep", "hrv"].indexOf(setting("barMetric", "bodyBattery")) >= 0 ? setting("barMetric", "bodyBattery") : "bodyBattery"
-  readonly property var metric: service && service.payload && service.payload.metrics ? service.payload.metrics[metricKey] : null
-  readonly property string label: ({bodyBattery: "BB", steps: "Steps", sleep: "Sleep", hrv: "HRV"})[metricKey]
-  readonly property bool degraded: !service || !!service.message || !service.payload || service.payload.status === "cached" || Model.stale(metricKey, metric, service.now, service.payload.fetchedAt)
+  readonly property bool degraded: {
+    if (!service || !!service.message || !service.payload || ["cached", "error", "partial"].indexOf(service.payload.status) >= 0) return true
+    var metrics = service.payload.metrics || {}
+    return ["steps", "bodyBattery", "sleep"].some(function(key) { return Model.stale(key, metrics[key], service.now, service.payload.fetchedAt) })
+  }
   readonly property bool opened: popup.opened
   readonly property bool popoutSwitchClosing: popup.popoutSwitchClosing
+  readonly property var device: Model.watchDevice(service ? service.payload : null, setting("watchModel", ""), !!service && service.demoMode)
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -20,20 +23,21 @@ Ui.BarWidget {
   function toggle() { popup.toggle() }
   function closeForPopoutSwitch() { popup.closeForPopoutSwitch() }
 
-  Ui.WidgetButton {
+  Ui.BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: (root.vertical ? "G" : (root.service && root.service.demoMode ? "Demo " : "") + root.label + " " + Model.format(root.metric)) + (root.degraded ? " *" : "")
     dimmed: root.degraded
-    tooltipText: root.label + ": " + Model.format(root.metric)
-      + (root.metric && root.metric.time ? "\nSample: " + root.metric.time : "\nNo measurement")
+    tooltipText: Model.tooltip(root.service ? root.service.payload : null, root.service ? root.service.now : Date.now())
       + (root.service && root.service.message ? "\n" + root.service.message : "")
-      + (root.service && root.service.payload && (root.service.payload.status === "cached" || root.service.now - Date.parse(root.service.payload.fetchedAt) > 3600000) ? "\nCached reading / not a live sync" : "")
-      + "\nLeft: dashboard / Middle: refresh / *: stale, cached or unavailable"
     onPressed: function(code) {
       if (code === Qt.MiddleButton) { if (root.service) root.service.refresh(false) }
       else root.toggle()
+    }
+    Accessible.role: Accessible.Button
+    Accessible.name: tooltipText
+    iconComponent: WatchIcon {
+      ink: button.foreground; watchStyle: Model.watchStyle(root.device.name)
     }
   }
   Panel {

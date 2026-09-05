@@ -12,7 +12,18 @@ function validTime(value) {
 
 function validValue(key, value) {
   return value === null || (typeof value === "number" && isFinite(value) && value >= 0
-    && (["bodyBattery", "sleep"].indexOf(key) < 0 || value <= 100))
+    && (["bodyBattery", "sleep", "trainingReadiness", "stress"].indexOf(key) < 0 || value <= 100))
+}
+
+function validMetric(key, metric, unit) {
+  return !!metric && typeof metric === "object" && !Array.isArray(metric)
+    && metric.unit === unit && validValue(key, metric.value)
+    && ["fresh", "stale", "missing"].indexOf(metric.state) >= 0
+    && (metric.time === null || validTime(metric.time))
+    && (metric.date === null || validDate(metric.date))
+    && (metric.value === null ? metric.state === "missing" && metric.expiresAt === null
+        : metric.state !== "missing" && validTime(metric.time) && validDate(metric.date)
+          && validTime(metric.expiresAt) && Date.parse(metric.expiresAt) > Date.parse(metric.time))
 }
 
 function valid(data) {
@@ -20,17 +31,24 @@ function valid(data) {
       || !data.metrics || !data.charts || !validTime(data.fetchedAt)
       || typeof data.timezone !== "string" || !data.timezone
       || (data.chartsFetchedAt !== null && !validTime(data.chartsFetchedAt))) return false
+  if (data.device !== undefined && data.device !== null
+      && (!deviceName(data.device.name) || ["Device", "demo"].indexOf(data.device.source) < 0)) return false
+  if (data.sourceDate !== undefined && !validDate(data.sourceDate)) return false
+  if (data.sourceDayStart !== undefined && !validTime(data.sourceDayStart)) return false
+  if (data.sourceDayEnd !== undefined && !validTime(data.sourceDayEnd)) return false
   var names = ["bodyBattery", "steps", "sleep", "hrv"]
   var units = ["score", "steps", "score", "ms"]
-  for (var i = 0; i < names.length; i++) {
-    var metric = data.metrics[names[i]]
-    if (!metric || metric.unit !== units[i] || !validValue(names[i], metric.value)
-        || ["fresh", "stale", "missing"].indexOf(metric.state) < 0
-        || (metric.time !== null && !validTime(metric.time))
-        || (metric.date !== null && !validDate(metric.date))
-        || (metric.value === null ? metric.state !== "missing" || metric.expiresAt !== null
-            : metric.state === "missing" || !validTime(metric.time) || !validDate(metric.date)
-              || !validTime(metric.expiresAt) || Date.parse(metric.expiresAt) <= Date.parse(metric.time))) return false
+  for (var i = 0; i < names.length; i++)
+    if (!validMetric(names[i], data.metrics[names[i]], units[i])) return false
+  var wellness = ["sleepDuration", "restingHeartRate", "trainingReadiness", "stress"]
+  var wellnessUnits = ["seconds", "bpm", "score", "score"]
+  if (data.wellness !== undefined) {
+    if (!data.wellness || typeof data.wellness !== "object" || Array.isArray(data.wellness)) return false
+    for (var w = 0; w < wellness.length; w++) {
+      var metric = data.wellness[wellness[w]]
+      if (!validMetric(wellness[w], metric, wellnessUnits[w])
+          || (metric.value !== null && !validTime(data.wellnessFetchedAt))) return false
+    }
   }
   var keys = ["bodyBattery", "steps", "sleep"]
   for (var j = 0; j < keys.length; j++) {
@@ -41,6 +59,51 @@ function valid(data) {
       if (!points[p] || !validValue(keys[j], points[p].value)
           || !(j === 0 ? validTime(points[p].time) : validDate(points[p].date))) return false
   }
+  var errors = ["query_error", "invalid_response", "truncated_response", "ambiguous_source",
+    "source_unavailable", "timeout", "network_error", "auth_error", "http_error",
+    "redirect_refused", "response_too_large"]
+  var bundles = ["activity", "history", "wellness", "supplementalHistory", "stress"]
+  for (var e = 0; e < bundles.length; e++) {
+    var kind = bundles[e]
+    var fetched = data[kind + "FetchedAt"]
+    var error = data[kind + "Error"]
+    if (fetched !== undefined && fetched !== null && !validTime(fetched)) return false
+    if (error !== undefined && error !== null && errors.indexOf(error) < 0) return false
+  }
+  var histories = ["history", "supplementalHistory"]
+  for (var b = 0; b < histories.length; b++) {
+    var bundle = data[histories[b]]
+    if (bundle === undefined) continue
+    if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) return false
+    var historyKeys = b === 0 ? names : wellness
+    for (var h = 0; h < historyKeys.length; h++) {
+      var history = bundle[historyKeys[h]]
+      if (!Array.isArray(history) || history.length > 7
+          || (history.length && !validTime(data[histories[b] + "FetchedAt"]))) return false
+      for (var d = 0; d < history.length; d++)
+        if (!history[d] || !validDate(history[d].date) || !validValue(historyKeys[h], history[d].value)) return false
+    }
+  }
+  if (data.stressSeries !== undefined) {
+    var stress = data.stressSeries
+    if (!Array.isArray(stress) || stress.length > 2000
+        || (stress.length && !validTime(data.stressFetchedAt))) return false
+    for (var s = 0; s < stress.length; s++)
+      if (!stress[s] || !validTime(stress[s].time) || !validValue("stress", stress[s].value)) return false
+  }
+  var activity = data.latestActivity
+  if (activity !== undefined && activity !== null) {
+    if (typeof activity !== "object" || Array.isArray(activity) || !validTime(activity.time)
+        || !validTime(data.activityFetchedAt) || typeof activity.type !== "string"
+        || !activity.type.trim() || activity.type.trim() === "No Activity"
+        || activity.type.replace(/[\ud800-\udbff][\udc00-\udfff]/g, "x").length > 80
+        || /[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/.test(activity.type)) return false
+    var fields = ["durationSeconds", "distanceMeters", "calories", "bmrCalories", "averageHR", "maxHR",
+      "movingDuration", "averageSpeed", "maxSpeed", "elevationGain", "elevationLoss",
+      "aerobicTrainingEffect", "anaerobicTrainingEffect", "activityTrainingLoad"]
+    for (var a = 0; a < fields.length; a++)
+      if (activity[fields[a]] !== undefined && !validValue(fields[a], activity[fields[a]])) return false
+  }
   return true
 }
 
@@ -49,13 +112,182 @@ function format(metric) {
   return metric.unit === "steps" && metric.value >= 1000 ? (metric.value / 1000).toFixed(1) + "k" : String(Math.round(metric.value))
 }
 
+function deviceName(value) {
+  if (typeof value !== "string" || /[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/.test(value)) return ""
+  var name = value.trim()
+  var length = name.replace(/[\ud800-\udbff][\udc00-\udfff]/g, "x").length
+  return length > 80 || /^(unknown|garmin)$/i.test(name) ? "" : name
+}
+
+function watchDevice(payload, override, demoMode) {
+  // Demo must never borrow the real watch's configured identity.
+  var demo = demoMode || (payload && payload.status === "demo")
+  var configured = demo ? "" : deviceName(override)
+  var reported = payload && payload.device ? deviceName(payload.device.name) : ""
+  return {name: configured || reported || "Garmin watch",
+    source: demo ? "Synthetic device" : configured ? "Model set in settings" : reported ? "Reported by collector" : "Model unavailable",
+    known: !!(configured || reported)}
+}
+
+function watchStyle(name) {
+  var model = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  if (/\b(venu\s+sq(?:\b|\d)|forerunner\s+(?:30|35)(?:\b|\D))/.test(model)) return "square"
+  if (/\b(vivosmart|vivofit)\b/.test(model)) return "slim"
+  if (/\b(fenix|epix|enduro|instinct|tactix|quatix|descent|marq)\b/.test(model)) return "rugged"
+  if (/\bvivomove\b/.test(model)) return "hybrid"
+  if (/\b(forerunner|venu|vivoactive|lily)\b/.test(model)) return "round"
+  return "generic"
+}
+
+function activityKind(type) {
+  var key = typeof type === "string" ? type.trim().toLowerCase().replace(/[\s-]+/g, "_") : ""
+  if (/^(mountain_biking|mountainbiking|mountain_cycling|e_bike_mountain|bmx)$/.test(key)) return "mountainBiking"
+  if (/^(wind_kite_surfing|windsurfing|wind_surfing|kitesurfing|kite_surfing)$/.test(key)) return "windsurfing"
+  if (/^(running|trail_running|treadmill_running|indoor_running|track_running|street_running|ultra_run|virtual_run)$/.test(key)) return "running"
+  if (/^(cycling|biking|road_biking|road_cycling|indoor_cycling|gravel_cycling|virtual_ride|e_bike_fitness|cyclocross|recumbent_cycling|hand_cycling|track_cycling)$/.test(key)) return "cycling"
+  if (/^(rowing|indoor_rowing)$/.test(key)) return "rowing"
+  if (/^(strength|strength_training|weight_training|weightlifting)$/.test(key)) return "strength"
+  if (/^(walking|casual_walking|speed_walking|indoor_walking)$/.test(key)) return "walking"
+  if (/^(hiking|mountaineering)$/.test(key)) return "hiking"
+  if (/^(swimming|lap_swimming|open_water_swimming|pool_swimming)$/.test(key)) return "swimming"
+  if (/^(skiing|alpine_skiing|backcountry_skiing|resort_skiing|cross_country_skiing|skate_skiing|snowboarding|resort_snowboarding|backcountry_snowboarding)$/.test(key)) return "skiing"
+  if (/^(yoga|pilates)$/.test(key)) return "yoga"
+  if (/^(paddling|stand_up_paddleboarding|stand_up_paddle_boarding|kayaking|kayaking_v2|canoeing)$/.test(key)) return "paddling"
+  if (/^(cardio|fitness_equipment|elliptical|stair_climbing|floor_climbing|hiit|indoor_cardio)$/.test(key)) return "cardio"
+  return "generic"
+}
+
+function activityName(type) {
+  if (typeof type !== "string" || !type.trim()) return "Activity"
+  return type.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ").toLowerCase()
+    .replace(/\b\w/g, function(letter) { return letter.toUpperCase() })
+}
+
+function numeric(value) {
+  if (typeof value !== "number" || !isFinite(value) || value < 0) return "--"
+  var text = String(Math.round(value))
+  // Large finite numbers must still be plain integers, not scientific notation.
+  var parts = text.split("e+")
+  if (parts.length === 2) {
+    var digits = parts[0].replace(".", "")
+    return digits + "0".repeat(Number(parts[1]) + 1 - digits.length)
+  }
+  return text
+}
+
+function duration(seconds) {
+  if (numeric(seconds) === "--") return "--"
+  var minutes = Math.round(seconds / 60)
+  return minutes < 60 ? numeric(minutes) + " min"
+    : numeric(Math.floor(minutes / 60)) + " h" + (minutes % 60 ? " " + numeric(minutes % 60) + " min" : "")
+}
+
+function sleepDuration(seconds) {
+  if (numeric(seconds) === "--") return "--"
+  var minutes = Math.round(seconds / 60)
+  return numeric(Math.floor(minutes / 60)) + "h " + numeric(minutes % 60) + "m"
+}
+
+function activityPerformance(activity) {
+  if (!activity) return ""
+  var kind = activityKind(activity.type)
+  var speed = activity.averageSpeed
+  if (["running", "walking", "hiking", "swimming", "rowing"].indexOf(kind) >= 0) {
+    if (typeof speed !== "number" || !isFinite(speed) || speed <= 0 || speed > 100) return ""
+    var distance = kind === "swimming" ? 100 : kind === "rowing" ? 500 : 1000
+    var seconds = Math.round(distance / speed)
+    // Bound the display, not the stored measurement: corrupt speeds must not produce giant or zero paces.
+    if (seconds < 1 || seconds > 5999) return ""
+    return Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0")
+      + (distance === 1000 ? " /km" : " /" + distance + "m")
+  }
+  if (["cycling", "mountainBiking", "windsurfing", "skiing"].indexOf(kind) < 0) return ""
+  var parts = []
+  var fields = ["averageSpeed", "maxSpeed"]
+  for (var i = 0; i < fields.length; i++) {
+    speed = activity[fields[i]]
+    if (typeof speed !== "number" || !isFinite(speed) || speed <= 0 || speed > 100) continue
+    var kmh = (speed * 3.6).toFixed(1)
+    if (Number(kmh) > 0) parts.push((i === 0 ? "Avg " : "Max ") + kmh + " km/h")
+  }
+  return parts.join(" - ")
+}
+
+function activityDetails(activity) {
+  var rows = []
+  if (!activity) return rows
+  var fields = ["movingDuration", "maxHR", "elevationGain", "elevationLoss",
+    "aerobicTrainingEffect", "anaerobicTrainingEffect", "activityTrainingLoad"]
+  var labels = ["Moving time", "Max HR", "Elevation gain", "Elevation loss",
+    "Aerobic effect", "Anaerobic effect", "Training load"]
+  for (var i = 0; i < fields.length; i++) {
+    var value = activity[fields[i]]
+    if (numeric(value) === "--") continue
+    var text = i === 0 ? duration(value) : i === 4 || i === 5 ? value.toFixed(1) : numeric(value)
+    if (i === 1) text += " bpm"
+    if (i === 2 || i === 3) text += " m"
+    rows.push({label: labels[i], value: text})
+  }
+  return rows
+}
+
+function activityDistance(activity) {
+  if (!activity || ["running", "cycling", "mountainBiking", "windsurfing", "rowing", "walking",
+      "hiking", "swimming", "skiing", "paddling"].indexOf(activityKind(activity.type)) < 0
+      || numeric(activity.distanceMeters) === "--" || activity.distanceMeters <= 0) return ""
+  return activity.distanceMeters >= 1000 ? (activity.distanceMeters / 1000).toFixed(1) + " km"
+    : numeric(activity.distanceMeters) + " m"
+}
+
+function activitySummary(activity) {
+  if (!activity) return "--"
+  var distance = activityDistance(activity)
+  return activityName(activity.type) + " - " + duration(activity.durationSeconds) + (distance ? " - " + distance : "")
+}
+
+function average(points) {
+  var value = null
+  var count = 0
+  if (Array.isArray(points)) {
+    for (var i = 0; i < points.length; i++) {
+      if (!points[i] || numeric(points[i].value) === "--") continue
+      count++
+      value = count === 1 ? points[i].value : value + (points[i].value - value) / count
+    }
+  }
+  return {value: value, count: count}
+}
+
+function tooltip(payload, now) {
+  var metrics = payload && payload.metrics ? payload.metrics : {}
+  var fetchedAt = payload ? payload.fetchedAt : null
+  var rows = []
+  if (payload && payload.status === "demo") rows.push("Demo data")
+  var keys = ["steps", "bodyBattery", "sleep"]
+  var labels = ["Steps today", "Body battery", "Sleep score"]
+  for (var i = 0; i < keys.length; i++) {
+    var metric = metrics[keys[i]]
+    var value = numeric(metric ? metric.value : null)
+    var expired = stale(keys[i], metric, now, fetchedAt)
+    if (keys[i] === "steps" && expired) value = "--"
+    rows.push(labels[i] + ": " + value + (keys[i] !== "steps" && value !== "--" && expired ? " (stale)" : ""))
+  }
+  var activity = payload ? payload.latestActivity : null
+  var cached = activity && (payload.activityError || payload.status === "cached"
+    || !validTime(payload.activityFetchedAt) || !isFinite(now)
+    || now - Date.parse(payload.activityFetchedAt) > 3600000)
+  rows.push("Latest activity: " + activitySummary(activity) + (cached ? " (cached)" : ""))
+  return rows.join("\n")
+}
+
 function stale(key, metric, now, fetchedAt) {
   if (!metric || metric.value === null || metric.state !== "fresh" || !isFinite(now)
       || !validTime(fetchedAt) || !validTime(metric.time) || !validTime(metric.expiresAt)
       || now < Date.parse(metric.time)) return true
   if (now - Date.parse(fetchedAt) > 3600000) return true
-  // Steps expire at source-local midnight; age-based metrics include their deadline.
-  return key === "steps" ? now >= Date.parse(metric.expiresAt) : now > Date.parse(metric.expiresAt)
+  // Daily metrics expire at source-local midnight; age-based metrics include their deadline.
+  return ["steps", "restingHeartRate", "trainingReadiness"].indexOf(key) >= 0
+    ? now >= Date.parse(metric.expiresAt) : now > Date.parse(metric.expiresAt)
 }
 
 function errorMessage(code) {

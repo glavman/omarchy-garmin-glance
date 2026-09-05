@@ -11,6 +11,8 @@ Body Battery is fresh through 2 hours,
 steps on the current local date, and sleep/HRV through 36 hours after sleep end.
 Charts show 24 hours of Body Battery and seven local dates of steps/sleep;
 daily points use the latest record, never a sum. Missing chart days are null.
+History uses seven completed source-local dates, including daily peak Body
+Battery, and latest nonnull sleep/HRV per field. Activity is a single raw summary.
 dailyStepGoal is NOT written by the inspected upstream, so goal is omitted.
 
 GROUP BY * preserves source tags. Multiple series or differing tag identities
@@ -57,6 +59,22 @@ METRICS = {"bodyBattery": ("BodyBatteryIntraday", "BodyBatteryLevel", "score"),
            "steps": ("DailyStats", "totalSteps", "steps"),
            "sleep": ("SleepSummary", "sleepScore", "score"),
            "hrv": ("SleepSummary", "avgOvernightHrv", "ms")}
+HISTORY_FIELDS = {"bodyBattery": "bodyBatteryHighestValue", "steps": "totalSteps",
+                  "sleep": "sleepScore", "hrv": "avgOvernightHrv"}
+WELLNESS = {"sleepDuration": ("SleepSummary", "sleepTimeSeconds", "seconds"),
+            "restingHeartRate": ("DailyStats", "restingHeartRate", "bpm"),
+            "trainingReadiness": ("TrainingReadiness", "score", "score"),
+            "stress": ("StressIntraday", "stressLevel", "score")}
+SUPPLEMENTAL_FIELDS = {key: spec[1] for key, spec in WELLNESS.items()}
+ACTIVITY_DETAILS = ("averageHR", "maxHR", "movingDuration", "averageSpeed", "maxSpeed",
+                    "elevationGain", "elevationLoss", "aerobicTrainingEffect",
+                    "anaerobicTrainingEffect", "activityTrainingLoad")
+ACTIVITY_FIELDS = {"type": "activityType", "durationSeconds": "elapsedDuration",
+                   "distanceMeters": "distance", "calories": "calories", "bmrCalories": "bmrCalories",
+                   **{field: field for field in ACTIVITY_DETAILS}}
+OPTIONAL_ERRORS = {"query_error", "invalid_response", "truncated_response", "ambiguous_source",
+                   "source_unavailable", "timeout", "network_error", "auth_error", "http_error",
+                   "redirect_refused", "response_too_large"}
 
 
 class Failure(Exception):
@@ -79,7 +97,8 @@ def timestamp(value):
 def number(value, field):
     return ((type(value) is int or type(value) is float and math.isfinite(value))
             and value >= 0
-            and (field not in ("BodyBatteryLevel", "sleepScore") or value <= 100))
+            and (field not in ("BodyBatteryLevel", "bodyBatteryHighestValue", "sleepScore",
+                               "score", "stressLevel") or value <= 100))
 
 
 def decode(raw):
@@ -153,30 +172,66 @@ def load_config(path=None):
 
 
 def empty(now, zone, status="error", error=None):
+    day_start = datetime.combine(now.astimezone(ZoneInfo(zone)).date(), time(), ZoneInfo(zone))
     return {"schemaVersion": 1, "status": status, "error": error,
-            "fetchedAt": iso(now), "timezone": zone,
+            "fetchedAt": iso(now), "timezone": zone, "device": None,
+            "sourceDayStart": iso(day_start), "sourceDayEnd": iso(day_start + timedelta(days=1)),
             "metrics": {key: {"value": None, "time": None, "date": None,
                                "state": "missing", "unit": spec[2], "expiresAt": None}
                         for key, spec in METRICS.items()},
             "charts": {"bodyBattery": [], "steps": [], "sleep": []},
-            "chartsFetchedAt": None}
+            "chartsFetchedAt": None,
+            "history": {key: [] for key in HISTORY_FIELDS}, "historyFetchedAt": None,
+            "latestActivity": None, "activityFetchedAt": None,
+            "activityError": None, "historyError": None,
+            "wellness": {key: {"value": None, "time": None, "date": None,
+                                "state": "missing", "unit": spec[2], "expiresAt": None}
+                         for key, spec in WELLNESS.items()},
+            "wellnessFetchedAt": None, "wellnessError": None,
+            "supplementalHistory": {key: [] for key in WELLNESS},
+            "supplementalHistoryFetchedAt": None, "supplementalHistoryError": None,
+            "stressSeries": [], "stressFetchedAt": None, "stressError": None}
+
+
+def device_from_source(source):
+    """Expose only the upstream Device label, which may be user-customized."""
+    try:
+        tags = decode(source)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if (not isinstance(tags, dict)
+            or any(not isinstance(k, str) or not isinstance(v, str) for k, v in tags.items())):
+        return None
+    name = tags.get("Device", "")
+    if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name):
+        return None
+    name = name.strip()
+    if not name or len(name) > 80 or not name.isprintable() or name.casefold() in ("unknown", "garmin"):
+        return None
+    return {"name": name, "source": "Device"}
 
 
 def refresh_states(result, now):
     zone = ZoneInfo(result["timezone"])
-    for key, metric in result["metrics"].items():
+    result["sourceDate"] = now.astimezone(zone).date().isoformat()
+    day_start = datetime.combine(now.astimezone(zone).date(), time(), zone)
+    result["sourceDayStart"] = iso(day_start)
+    result["sourceDayEnd"] = iso(day_start + timedelta(days=1))
+    for key, metric in {**result["metrics"], **result.get("wellness", {})}.items():
         if metric["value"] is None:
             metric["state"] = "missing"
             metric["expiresAt"] = None
             continue
         when = timestamp(metric["time"])
         metric["date"] = when.astimezone(zone).date().isoformat()
+        daily = key in ("steps", "restingHeartRate", "trainingReadiness")
+        hours = 2 if key in ("bodyBattery", "stress") else 36
         deadline = (datetime.combine(when.astimezone(zone).date() + timedelta(days=1), time(), zone)
-                    if key == "steps" else when + timedelta(hours=2 if key == "bodyBattery" else 36))
+                    if daily else when + timedelta(hours=hours))
         metric["expiresAt"] = iso(deadline)
         age = now - when
         fresh = (metric["date"] == now.astimezone(zone).date().isoformat()
-                 if key == "steps" else age <= timedelta(hours=2 if key == "bodyBattery" else 36))
+                 if daily else age <= timedelta(hours=hours))
         metric["state"] = "fresh" if age >= timedelta(0) and fresh else "stale"
 
 
@@ -190,7 +245,10 @@ def queries(config, now, charts):
     specs = [(name, now - timedelta(days=30), 1, False, (field,))
              for name, field, _ in METRICS.values()]
     if charts:
-        specs.extend((name, now - timedelta(hours=24) if name == "BodyBatteryIntraday" else start,
+        # Keep rolling charts while also covering the full 25-hour source day.
+        intraday_start = min(now - timedelta(hours=24),
+                             datetime.combine(now.astimezone(zone).date(), time(), zone))
+        specs.extend((name, intraday_start if name == "BodyBatteryIntraday" else start,
                       2000 if name == "BodyBatteryIntraday" else 1000, True, FIELDS[name]) for name in FIELDS)
     statements = []
     for name, since, limit, is_chart, fields in specs:
@@ -255,10 +313,10 @@ def request(config, query, timeout=TIMEOUT):
         signal.signal(signal.SIGALRM, previous_handler)
 
 
-def fetch(config, now, charts=False):
+def fetch(config, now, charts=False, extras=True, previous=None):
     deadline = monotonic() + FETCH_BUDGET
     specs, statements = queries(config, now, charts)
-    payload = request(config, ";".join(statements))
+    payload = request(config, ";".join(statements), timeout=min(TIMEOUT, FETCH_BUDGET))
     result = empty(now, config["timezone"], "ok")
     sources = set()
     rows_by_spec = []
@@ -373,7 +431,252 @@ def fetch(config, now, charts=False):
             result["charts"][key] = [{"date": (today - timedelta(days=n)).isoformat(),
                                        "value": days.get((today - timedelta(days=n)).isoformat())}
                                       for n in range(6, -1, -1)]
-    return result, next(iter(sources), None)
+    source = next(iter(sources), None)
+    result["device"] = device_from_source(source)
+    if extras:
+        # Chart-only or untagged results cannot establish an activity/account scope.
+        established = source if any(m["value"] is not None for m in result["metrics"].values()) else None
+        cached = (previous["data"] if previous is not None and established == previous["source"]
+                  and optional_source(established, config) is not None else None)
+        fetch_extras(config, now, charts, established, deadline, result, cached)
+        refresh_states(result, now)
+    return result, source
+
+
+def optional_source(source, config):
+    try:
+        tags = decode(source)
+        if (isinstance(tags, dict) and tags
+                and all(isinstance(k, str) and k and isinstance(v, str) and v for k, v in tags.items())
+                and all(tags.get(k) == v for k, v in config["tags"].items())):
+            return tags
+    except (ValueError, TypeError, RecursionError):
+        pass
+    return None
+
+
+def activity_summary(row, since, until):
+    when = timestamp(row["time"])
+    kind = row.get("activityType")
+    if (not since <= when <= until or not isinstance(kind, str) or not kind.strip()
+            or len(kind) > 80 or not kind.isprintable() or kind.strip() == "No Activity"):
+        raise ValueError("activity")
+    return {"time": iso(when), "type": kind,
+            **{key: row.get(field) if number(row.get(field), field)
+               and (field not in ("averageHR", "maxHR", "averageSpeed", "maxSpeed") or row[field] > 0) else None
+                for key, field in ACTIVITY_FIELDS.items() if key != "type"}}
+
+
+def fetch_extras(config, now, charts, source, deadline, result, cached=None):
+    tags = optional_source(source, config)
+    zone = ZoneInfo(config["timezone"])
+    today = now.astimezone(zone).date()
+    start = datetime.combine(today - timedelta(days=7), time(), zone)
+    end = datetime.combine(today, time(), zone)
+    jobs = [("activity", [("ActivitySummary", tuple(ACTIVITY_FIELDS.values()))], ())]
+    if charts:
+        jobs.append(("history", [("DailyStats", ("bodyBatteryHighestValue", "totalSteps")),
+                                  ("SleepSummary", ("sleepScore", "avgOvernightHrv"))], ()))
+    # Independent statements prevent Influx's "not executed" cascade from hiding
+    # healthy optional measurements, notably when TrainingReadiness is absent.
+    jobs.extend(("wellness", [(name, (field,))], (key,))
+                for key, (name, field, _) in WELLNESS.items())
+    if charts:
+        jobs.extend(("supplementalHistory", [(name, fields)], keys) for name, fields, keys in (
+            ("SleepSummary", ("sleepTimeSeconds",), ("sleepDuration",)),
+            ("DailyStats", ("restingHeartRate",), ("restingHeartRate",)),
+            ("TrainingReadiness", ("score",), ("trainingReadiness",))))
+        jobs.append(("stressHistory", [("StressIntraday", ("stressLevel",))] * 7, ("stress",)))
+        jobs.append(("stress", [("StressIntraday", ("stressLevel",))], ()))
+    failed = {kind: set() for kind in ("wellness", "supplementalHistory", "stress")}
+    for kind, specs, keys in jobs:
+        stress_history = kind == "stressHistory"
+        if stress_history:
+            kind = "supplementalHistory"
+        try:
+            if tags is None:
+                raise Failure("source_unavailable")
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise Failure("timeout")
+            activity = kind == "activity"
+            daily = kind in ("history", "supplementalHistory")
+            since, until = ((start, end) if daily else
+                            (now - (timedelta(days=365) if activity else timedelta(days=30)
+                                    if kind == "wellness" else timedelta(hours=24)), now))
+            if kind == "stress":
+                since = min(since, end)
+            limit = 1 if activity or kind == "wellness" or stress_history else 2000 if kind == "stress" else 999
+            statements = []
+            for index, (name, fields) in enumerate(specs):
+                if stress_history:
+                    # Calendar arithmetic keeps each selector aligned across DST.
+                    since, until = start + timedelta(days=index), start + timedelta(days=index + 1)
+                conditions = ["time >= '" + iso(since) + "'",
+                              "time " + ("<" if daily else "<=") + " '" + iso(until) + "'"]
+                conditions.extend(quoted(k, '"') + " = " + quoted(v, "'") for k, v in sorted(tags.items()))
+                if activity:
+                    conditions.append('"activityType" != \'No Activity\'')
+                if stress_history:
+                    conditions.extend(('"stressLevel" >= 0', '"stressLevel" <= 100'))
+                if kind == "wellness":
+                    conditions.append(quoted(fields[0], '"') + " >= 0")
+                    if keys[0] in ("trainingReadiness", "stress"):
+                        conditions.append(quoted(fields[0], '"') + " <= 100")
+                # Activity IDs are tags: GROUP BY * would make LIMIT 1 per activity.
+                statements.append("SELECT " + ('MEAN("stressLevel") AS "stressLevel"' if stress_history else
+                                               ",".join(quoted(f, '"') for f in fields))
+                                  + (",*::tag" if activity else "") + " FROM " + quoted(name, '"')
+                                  + " WHERE " + " AND ".join(conditions)
+                                  + (" GROUP BY * SLIMIT 2" if stress_history else
+                                     " ORDER BY time DESC LIMIT 1" if activity else
+                                     " GROUP BY * ORDER BY time DESC LIMIT "
+                                     + str(limit + int(daily or kind == "stress")) + " SLIMIT 2"))
+            payload = request(config, ";".join(statements), timeout=min(TIMEOUT, remaining))
+            if not isinstance(payload, dict):
+                raise ValueError("payload")
+            if "error" in payload:
+                raise Failure("query_error")
+            items = payload["results"]
+            if not isinstance(items, list) or len(items) != len(specs):
+                raise ValueError("results")
+            rows = []
+            for index, ((name, fields), item) in enumerate(zip(specs, items)):
+                if stress_history:
+                    since, until = start + timedelta(days=index), start + timedelta(days=index + 1)
+                if (not isinstance(item, dict) or type(item.get("statement_id")) is not int
+                        or item["statement_id"] != index):
+                    raise ValueError("statement")
+                if "error" in item:
+                    raise Failure("query_error")
+                if item.get("partial"):
+                    raise Failure("truncated_response")
+                series = item.get("series", [])
+                if not isinstance(series, list):
+                    raise ValueError("series")
+                if len(series) > 1:
+                    raise Failure("ambiguous_source")
+                for entry in series:
+                    if not isinstance(entry, dict) or entry["name"] != name:
+                        raise ValueError("measurement")
+                    if entry.get("partial"):
+                        raise Failure("truncated_response")
+                    entry_tags = entry.get("tags", {})
+                    if (not isinstance(entry_tags, dict)
+                            or any(not isinstance(k, str) or not isinstance(v, str) for k, v in entry_tags.items())):
+                        raise ValueError("tags")
+                    columns, values = entry["columns"], entry["values"]
+                    if (not isinstance(columns, list) or not all(isinstance(c, str) for c in columns)
+                            or len(set(columns)) != len(columns) or "time" not in columns
+                            or not isinstance(values, list)
+                            or (stress_history and set(columns) != {"time", "stressLevel"})
+                            or (not activity and set(columns) - {"time", *fields})):
+                        raise ValueError("columns")
+                    if len(values) > limit:
+                        # At the history cap, completeness cannot be established.
+                        raise Failure("truncated_response")
+                    if not activity and entry_tags != tags:
+                        raise Failure("ambiguous_source")
+                    for values_row in values:
+                        if not isinstance(values_row, list) or len(values_row) != len(columns):
+                            raise ValueError("row")
+                        row = dict(zip(columns, values_row))
+                        row_tags = dict(entry_tags)
+                        if activity:
+                            for key in set(columns) - {"time", *fields}:
+                                value = row[key]
+                                if value is None:
+                                    continue  # Absent optional tags in a mixed tag schema.
+                                if not isinstance(value, str) or (key in row_tags and row_tags[key] != value):
+                                    raise ValueError("tag column")
+                                row_tags[key] = value
+                            row_tags = {k: v for k, v in row_tags.items()
+                                        if k not in ("ActivityID", "ActivitySelector")}
+                            if row_tags != tags:
+                                raise Failure("ambiguous_source")
+                        when = timestamp(row["time"])
+                        if stress_history:
+                            # Ungrouped aggregates use the lower bound or Influx's
+                            # epoch timestamp, not the time of an individual sample.
+                            if when not in (since, datetime(1970, 1, 1, tzinfo=UTC)):
+                                raise ValueError("aggregate time")
+                            value = row.get("stressLevel")
+                            if value is not None and not number(value, "stressLevel"):
+                                raise ValueError("stress mean")
+                            row["time"] = iso(since)
+                        elif not since <= when <= until or (daily and when == until):
+                            raise ValueError("range")
+                        rows.append(row)
+            if activity:
+                result["latestActivity"] = activity_summary(rows[0], since, until) if rows else None
+            elif kind == "wellness":
+                if rows:
+                    row = rows[0]
+                    value = row.get(specs[0][1][0])
+                    if not number(value, specs[0][1][0]):
+                        raise ValueError("wellness value")
+                    result["wellness"][keys[0]].update(value=value, time=iso(timestamp(row["time"])))
+            elif kind == "stress":
+                result["stressSeries"] = [
+                    {"time": iso(timestamp(row["time"])),
+                     "value": row.get("stressLevel") if number(row.get("stressLevel"), "stressLevel") else None}
+                    for row in sorted(rows, key=lambda r: timestamp(r["time"]))]
+            elif kind == "supplementalHistory":
+                days = {key: {} for key in keys}
+                for row in sorted(rows, key=lambda r: timestamp(r["time"]), reverse=True):
+                    day = timestamp(row["time"]).astimezone(zone).date().isoformat()
+                    for key in keys:
+                        value = row.get(SUPPLEMENTAL_FIELDS[key])
+                        if day not in days[key] and number(value, SUPPLEMENTAL_FIELDS[key]):
+                            days[key][day] = value
+                for key in keys:
+                    result[kind][key] = [
+                        {"date": (today - timedelta(days=n)).isoformat(),
+                         "value": days[key].get((today - timedelta(days=n)).isoformat())}
+                        for n in range(7, 0, -1)]
+            else:
+                days = {key: {} for key in HISTORY_FIELDS}
+                for row in sorted(rows, key=lambda r: timestamp(r["time"]), reverse=True):
+                    day = timestamp(row["time"]).astimezone(zone).date().isoformat()
+                    for key, field in HISTORY_FIELDS.items():
+                        if field not in row or day in days[key]:
+                            continue
+                        value = row[field]
+                        if value is not None and not number(value, field):
+                            raise ValueError("history value")
+                        if key in ("sleep", "hrv") and value is None:
+                            continue
+                        days[key][day] = value
+                result["history"] = {
+                    key: [{"date": (today - timedelta(days=n)).isoformat(),
+                           "value": days[key].get((today - timedelta(days=n)).isoformat())}
+                          for n in range(7, 0, -1)] for key in HISTORY_FIELDS}
+            result[kind + "FetchedAt"] = iso(now)
+        except Failure as exc:
+            result[kind + "Error"] = str(exc) if str(exc) in OPTIONAL_ERRORS else "invalid_response"
+            if kind in failed:
+                failed[kind].update(keys or ("stressSeries",))
+        except (KeyError, ValueError, TypeError, OverflowError, RecursionError):
+            result[kind + "Error"] = "invalid_response"
+            if kind in failed:
+                failed[kind].update(keys or ("stressSeries",))
+    if cached is not None:
+        for kind, fields in failed.items():
+            skipped = not charts and kind != "wellness"
+            if skipped:
+                fields = set(WELLNESS) if kind == "supplementalHistory" else {"stressSeries"}
+                result[kind + "Error"] = cached[kind + "Error"]
+            retained = False
+            for key in fields:
+                if kind == "stress":
+                    result[key] = copy.deepcopy(cached[key])
+                    retained = True
+                else:
+                    result[kind][key] = copy.deepcopy(cached[kind][key])
+                    retained = retained or cached[kind + "FetchedAt"] is not None
+            if retained or skipped:
+                # A mixed bundle must not rejuvenate the cached portion.
+                result[kind + "FetchedAt"] = cached[kind + "FetchedAt"]
 
 
 def cache_location(config):
@@ -405,6 +708,7 @@ def read_cache(path, key, config, now):
             return None
         # Reconstruct instead of forwarding unrecognized cache content to the UI.
         clean = empty(timestamp(result["fetchedAt"]), config["timezone"], result["status"], result["error"])
+        clean["device"] = device_from_source(envelope["source"])
         for metric, spec in METRICS.items():
             value = result["metrics"][metric]
             if value["value"] is not None and not number(value["value"], spec[1]):
@@ -430,6 +734,101 @@ def read_cache(path, key, config, now):
                     return None
                 coordinate = iso(timestamp(point[axis])) if axis == "time" else datetime.strptime(point[axis], "%Y-%m-%d").date().isoformat()
                 clean["charts"][chart].append({axis: coordinate, "value": point["value"]})
+        for kind in ("activity", "history", "wellness", "supplementalHistory", "stress"):
+            error = result.get(kind + "Error")
+            if error is not None and (not isinstance(error, str) or error not in OPTIONAL_ERRORS):
+                return None
+            clean[kind + "Error"] = error
+        if optional_source(envelope["source"], config) is not None:
+            for kind in ("activity", "history"):
+                fetched = result.get(kind + "FetchedAt")
+                if fetched is not None:
+                    fetched = timestamp(fetched)
+                    if fetched > timestamp(result["fetchedAt"]):
+                        return None
+                    clean[kind + "FetchedAt"] = iso(fetched)
+                if kind == "activity":
+                    activity = result.get("latestActivity")
+                    if activity is not None:
+                        if not isinstance(activity, dict) or fetched is None:
+                            return None
+                        row = {field: activity.get(key) for key, field in ACTIVITY_FIELDS.items()}
+                        row["time"] = activity["time"]
+                        clean["latestActivity"] = activity_summary(row, fetched - timedelta(days=365), fetched)
+                else:
+                    history = result.get("history", {key: [] for key in HISTORY_FIELDS})
+                    if not isinstance(history, dict) or set(history) != set(HISTORY_FIELDS):
+                        return None
+                    dates = ([(fetched.astimezone(ZoneInfo(config["timezone"])).date() - timedelta(days=n)).isoformat()
+                              for n in range(7, 0, -1)] if fetched else [])
+                    for key, points in history.items():
+                        if not isinstance(points, list) or len(points) not in (0, 7):
+                            return None
+                        if points and (fetched is None or [p["date"] for p in points] != dates):
+                            return None
+                        for point in points:
+                            value = point["value"]
+                            if value is not None and not number(value, HISTORY_FIELDS[key]):
+                                return None
+                            clean["history"][key].append({"date": point["date"], "value": value})
+            for kind in ("wellness", "supplementalHistory", "stress"):
+                fetched = result.get(kind + "FetchedAt")
+                if fetched is not None:
+                    fetched = timestamp(fetched)
+                    if fetched > timestamp(result["fetchedAt"]):
+                        return None
+                    clean[kind + "FetchedAt"] = iso(fetched)
+                if kind == "wellness":
+                    metrics = result.get(kind, clean[kind])
+                    if not isinstance(metrics, dict) or set(metrics) != set(WELLNESS):
+                        return None
+                    for key, metric in metrics.items():
+                        value = metric["value"]
+                        when = timestamp(metric["time"]) if metric["time"] is not None else None
+                        # Partial refreshes can contain live points newer than the
+                        # conservative bundle timestamp, but never newer than fetch.
+                        if (value is not None and (not number(value, WELLNESS[key][1])
+                                                  or when is None or fetched is None)
+                                or when is not None and when > timestamp(result["fetchedAt"])):
+                            return None
+                        clean[kind][key].update(value=value, time=iso(when) if when else None)
+                elif kind == "supplementalHistory":
+                    history = result.get(kind, clean[kind])
+                    if not isinstance(history, dict) or set(history) != set(WELLNESS):
+                        return None
+                    for key, points in history.items():
+                        if not isinstance(points, list) or len(points) not in (0, 7):
+                            return None
+                        if points:
+                            if fetched is None:
+                                return None
+                            last = datetime.strptime(points[-1]["date"], "%Y-%m-%d").date()
+                            today = timestamp(result["fetchedAt"]).astimezone(ZoneInfo(config["timezone"])).date()
+                            earliest = fetched.astimezone(ZoneInfo(config["timezone"])).date() - timedelta(days=1)
+                            if not earliest <= last < today or [p["date"] for p in points] != [
+                                    (last - timedelta(days=n)).isoformat() for n in range(6, -1, -1)]:
+                                return None
+                        for point in points:
+                            value = point["value"]
+                            if value is not None and not number(value, SUPPLEMENTAL_FIELDS[key]):
+                                return None
+                            clean[kind][key].append({"date": point["date"], "value": value})
+                else:
+                    points = result.get("stressSeries", [])
+                    if not isinstance(points, list) or len(points) > 2000 or points and fetched is None:
+                        return None
+                    since = (min(fetched - timedelta(hours=24), datetime.combine(
+                        fetched.astimezone(ZoneInfo(config["timezone"])).date(), time(), ZoneInfo(config["timezone"])))
+                        if fetched is not None else None)
+                    last = None
+                    for point in points:
+                        when, value = timestamp(point["time"]), point["value"]
+                        if (not since <= when <= fetched
+                                or last is not None and when < last
+                                or value is not None and not number(value, "stressLevel")):
+                            return None
+                        clean["stressSeries"].append({"time": iso(when), "value": value})
+                        last = when
         refresh_states(clean, now)
         return {"data": clean, "source": envelope["source"]}
     except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError):
@@ -458,7 +857,7 @@ def write_cache(path, key, result, source):
 
 def run(command, config, now, charts=False):
     if command == "doctor":
-        result, _ = fetch(config, now)
+        result, _ = fetch(config, now, extras=False)
         return empty(now, config["timezone"], result["status"], result["error"])
     path, key = cache_location(config)
     fd = os.open(path.with_suffix(".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
@@ -482,9 +881,19 @@ def run(command, config, now, charts=False):
                 result.update(status="cached", error="fetch_locked")
             else:
                 try:
-                    result, source = fetch(config, now, charts)
+                    result, source = fetch(config, now, charts, previous=previous)
+                    if (previous is not None and source == previous["source"]
+                            and optional_source(source, config) is not None
+                            and any(m["value"] is not None for m in result["metrics"].values())):
+                        for kind, field in (("activity", "latestActivity"), ("history", "history")):
+                            if result[kind + "Error"] is not None or (kind == "history" and not charts):
+                                result[field] = copy.deepcopy(previous["data"][field])
+                                result[kind + "FetchedAt"] = previous["data"][kind + "FetchedAt"]
+                                if kind == "history" and not charts:
+                                    result["historyError"] = previous["data"]["historyError"]
                     if previous is not None and (source is None or source == previous["source"]):
                         source = previous["source"]
+                        result["device"] = device_from_source(source)
                         for metric, value in result["metrics"].items():
                             if value["value"] is None:
                                 result["metrics"][metric] = copy.deepcopy(previous["data"]["metrics"][metric])
@@ -510,17 +919,50 @@ def run(command, config, now, charts=False):
             result = copy.deepcopy(result)
             result["charts"] = {"bodyBattery": [], "steps": [], "sleep": []}
             result["chartsFetchedAt"] = None
+            result["history"] = {key: [] for key in HISTORY_FIELDS}
+            result["historyFetchedAt"] = None
+            result["supplementalHistory"] = {key: [] for key in WELLNESS}
+            result["supplementalHistoryFetchedAt"] = None
+            result["supplementalHistoryError"] = None
+            result["stressSeries"] = []
+            result["stressFetchedAt"] = None
+            result["stressError"] = None
         return result
 
 
 def demo(now, charts):
     result = empty(now, DEFAULTS["timezone"], "demo")
+    result["device"] = {"name": "Forerunner 965", "source": "demo"}
     zone = ZoneInfo(result["timezone"])
     for key, value in {"bodyBattery": 73, "steps": 4321, "sleep": 82, "hrv": 48}.items():
         when = now - timedelta(hours=8) if key in ("sleep", "hrv") else now
         result["metrics"][key].update(value=value, time=iso(when), date=when.astimezone(zone).date().isoformat())
+    for key, value in {"sleepDuration": 28800, "restingHeartRate": 52, "trainingReadiness": 78, "stress": 23}.items():
+        when = now - timedelta(hours=8) if key == "sleepDuration" else now
+        result["wellness"][key].update(value=value, time=iso(when))
+    result["wellnessFetchedAt"] = iso(now)
     refresh_states(result, now)
+    result["latestActivity"] = {"time": iso(now - timedelta(hours=2)), "type": "Running",
+                                "durationSeconds": 1800, "distanceMeters": 5000,
+                                "calories": 350, "bmrCalories": 40,
+                                **dict(zip(ACTIVITY_DETAILS, (142, 168, 1750, 2.8, 4.1, 35, 32, 3.2, 1.1, 85)))}
+    result["activityFetchedAt"] = iso(now)
     if charts:
+        result["supplementalHistoryFetchedAt"] = iso(now)
+        result["stressFetchedAt"] = iso(now)
+        for key, metric in result["wellness"].items():
+            result["supplementalHistory"][key] = [
+                {"date": (now.astimezone(zone).date() - timedelta(days=n)).isoformat(),
+                 "value": metric["value"] - n} for n in range(7, 0, -1)]
+        result["stressSeries"] = [
+            {"time": iso(now - timedelta(minutes=n * 5)),
+             "value": None if n == 100 else round(25 + 20 * math.sin(n / 288 * 2 * math.pi), 1)}
+            for n in range(288, -1, -1)]
+        result["historyFetchedAt"] = iso(now)
+        for key, value in (("bodyBattery", 90), ("steps", 9000), ("sleep", 82), ("hrv", 48)):
+            result["history"][key] = [
+                {"date": (now.astimezone(zone).date() - timedelta(days=n)).isoformat(), "value": value - n}
+                for n in range(7, 0, -1)]
         result["chartsFetchedAt"] = iso(now)
         result["charts"]["bodyBattery"] = [
             {"time": iso(now - timedelta(minutes=n * 5)),

@@ -14,7 +14,7 @@ def copy_package(source, staging):
     """Copy only reviewed package files, never local data or linked inputs."""
     files = [
         "manifest.json", "Service.qml", "BarWidget.qml", "Panel.qml",
-        "Chart.qml", "MetricCard.qml", "Model.js", "backend.py",
+        "Chart.qml", "MetricCard.qml", "WatchFace.qml", "WatchIcon.qml", "ActivityIcon.qml", "StressChart.qml", "Model.js", "backend.py",
         "README.md", "LICENSE", "install.py",
     ]
     if source.is_symlink() or (source / "docs").is_symlink():

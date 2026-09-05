@@ -48,7 +48,7 @@ Item {
   function ensureCharts() {
     wantCharts = true
     if (busy && !requestCharts) { pendingCharts = true; return }
-    if (!payload || !payload.chartsFetchedAt || now - Date.parse(payload.chartsFetchedAt) > refreshMinutes * 60000)
+    if (!payload || !payload.historyFetchedAt || now - Date.parse(payload.historyFetchedAt) > refreshMinutes * 60000)
       refresh(true)
   }
   function reset() {
@@ -119,7 +119,14 @@ Item {
     function status(): string {
       return JSON.stringify({version: "1.0.0", busy: root.busy, demo: root.demoMode,
         status: root.payload ? root.payload.status : "loading", error: root.payload ? root.payload.error : null,
-        message: root.message, chartsLoaded: !!root.payload && !!root.payload.chartsFetchedAt})
+        message: root.message, chartsLoaded: !!root.payload && !!root.payload.chartsFetchedAt,
+        historyLoaded: !!root.payload && !!root.payload.historyFetchedAt,
+        activityAvailable: !!root.payload && !!root.payload.latestActivity,
+        activityError: root.payload ? root.payload.activityError : null,
+        historyError: root.payload ? root.payload.historyError : null,
+        wellnessError: root.payload ? root.payload.wellnessError : null,
+        supplementalHistoryError: root.payload ? root.payload.supplementalHistoryError : null,
+        stressError: root.payload ? root.payload.stressError : null})
     }
   }
 }

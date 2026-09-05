@@ -33,8 +33,7 @@ Rectangle {
     return (intraday ? Qt.formatDateTime(new Date(p.t), "yyyy-MM-dd HH:mm:ss") + " local" : p.date) + " / " + (p.value === null ? "Unavailable" : String(p.value) + " " + unit)
   }
   implicitHeight: heading.implicitHeight + inspection.implicitHeight + Style.space(intraday ? 174 : 134)
-  radius: Style.cornerRadius; color: Style.normalFill
-  border.width: 1; border.color: selected ? Color.accent : gridColor
+  color: "transparent"
   Accessible.role: Accessible.Chart
   Accessible.name: title + ". " + readout
   Accessible.focusable: true

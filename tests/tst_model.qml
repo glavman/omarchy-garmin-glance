@@ -284,6 +284,202 @@ TestCase {
     verify(Model.valid(data), "Up to seven daily values, with metric-specific bounds")
   }
 
+  function test_activity_selector_contract() {
+    var data = extrasFixture()
+    verify(Model.valid(data), "Old v1 activities without a selector remain valid")
+    var selectors = ["synthetic", "  Morning run & walk / #123?x=1  ", "caf\u00e9",
+      "x".repeat(256), "x".repeat(255) + "\ud83d\udc1f"]
+    for (var i = 0; i < selectors.length; i++) {
+      data.latestActivity.selector = selectors[i]
+      data.latestActivity.gpsSelector = selectors[i]
+      verify(Model.valid(data), "Valid selector " + i)
+      compare(data.latestActivity.selector, selectors[i], "Selectors are opaque, not normalized")
+    }
+    data.status = "cached"
+    verify(Model.valid(data))
+    delete data.latestActivity.selector
+    delete data.latestActivity.gpsSelector
+    verify(Model.valid(data), "Old cached activities remain valid")
+  }
+
+  function activitiesFixture() {
+    var data = extrasFixture()
+    data.activitiesFetchedAt = data.fetchedAt
+    data.activities = {startDate: "2026-08-30", endDate: "2026-09-05",
+      from: Date.parse("2026-08-29T23:00:00Z"), to: Date.parse("2026-09-05T23:00:00Z"),
+      items: [{id: "12345678901234567890", time: "2026-08-29T23:30:00Z", date: "2026-08-30",
+        type: "running", durationSeconds: 0, distanceMeters: null, calories: 0}]}
+    return data
+  }
+
+  function test_activities_contract() {
+    var data = fixture()
+    data.status = "cached"
+    verify(Model.valid(data), "Old v1 caches without activities remain valid")
+    data.activities = null
+    data.activitiesFetchedAt = null
+    verify(Model.valid(data))
+    data = activitiesFixture()
+    verify(Model.valid(data), "Source-local date need not equal the UTC timestamp date")
+    data.latestActivity.id = "9".repeat(32)
+    verify(Model.valid(data))
+    data.activities.items[0].type = "x".repeat(79) + "\ud83d\udc1f"
+    verify(Model.valid(data), "Type length counts Unicode code points")
+    data.activities.items[0].time = new Date(data.activities.from).toISOString()
+    verify(Model.valid(data), "Start instant is inclusive")
+    data.activities.items[0].date = data.activities.endDate
+    data.activities.items[0].time = new Date(data.activities.to - 1).toISOString()
+    verify(Model.valid(data), "End date is inclusive; end instant is exclusive")
+    data.activities.items = []
+    verify(Model.valid(data), "A complete empty bundle is valid")
+    data.activitiesFetchedAt = null
+    verify(!Model.valid(data), "Even an empty complete bundle needs a fetch timestamp")
+    data.activitiesFetchedAt = data.fetchedAt
+    var codes = ["query_error", "invalid_response", "truncated_response", "ambiguous_source",
+      "source_unavailable", "timeout", "network_error", "auth_error", "http_error",
+      "redirect_refused", "response_too_large"]
+    for (var c = 0; c < codes.length; c++) {
+      data.activitiesError = codes[c]
+      verify(Model.valid(data), "Cached bundle with error " + codes[c])
+    }
+    var ranges = [
+      ["2026-03-23", "2026-03-29", "2026-03-23T00:00:00Z", "2026-03-29T23:00:00Z"],
+      ["2026-10-19", "2026-10-25", "2026-10-18T23:00:00Z", "2026-10-26T00:00:00Z"],
+      ["2024-02-24", "2024-03-01", "2024-02-24T00:00:00Z", "2024-03-02T00:00:00Z"]]
+    for (var r = 0; r < ranges.length; r++) {
+      data.activities = {startDate: ranges[r][0], endDate: ranges[r][1],
+        from: Date.parse(ranges[r][2]), to: Date.parse(ranges[r][3]), items: []}
+      verify(Model.valid(data), "Seven calendar dates across DST or leap day")
+    }
+  }
+
+  function test_invalid_activities_data() {
+    var rows = []
+    var sections = {
+      root: {activities: [false, [], "activities", {}],
+        activitiesFetchedAt: [undefined, null, 0, "invalid", "2026-09-05", "2026-02-30T00:00:00Z"],
+        activitiesError: [false, 1, {}, "", "private error", "cache_miss"]},
+      bundle: {startDate: [undefined, null, 1, "2026-02-30", "2026-08-29", "2026-08-31"],
+        endDate: [undefined, null, "invalid", "2026-09-04", "2026-09-06", "2026-08-29"],
+        from: [undefined, null, "0", false, NaN, -Infinity, 1e20, Date.parse("2026-09-05T23:00:00Z")],
+        to: [undefined, null, "0", true, NaN, Infinity, 1e20, Date.parse("2026-08-29T23:00:00Z")],
+        items: [undefined, null, {}, "items", [null], [[]], [{}]]},
+      item: {id: [undefined, null, 123, true, {}, "", "1".repeat(33), "12.3", "-1", " 123", "123\n", "synthetic", "\u0661"],
+        time: [undefined, null, "invalid", "2026-02-30T00:00:00Z", "2026-09-01T00:00:00",
+          "2026-08-29T22:59:59.999Z", "2026-09-05T23:00:00Z"],
+        date: [undefined, null, "2026-02-30", "2026-08-29", "2026-09-06", "2026-09-01T00:00:00Z"],
+        type: [undefined, null, 1, "", " ", "No Activity", " No Activity ", "x".repeat(81),
+          "run\n", "run\u00a0", "run\u200b", "run\u202e", "run\ud800", "run\ue000",
+          "run\u061c", "run\udb80\udc00", "run\udb40\udc01"]}
+    }
+    var numbers = ["durationSeconds", "distanceMeters", "calories"]
+    for (var n = 0; n < numbers.length; n++)
+      sections.item[numbers[n]] = [undefined, -1, NaN, Infinity, -Infinity, "0", true, {}]
+    for (var section in sections)
+      for (var field in sections[section])
+        for (var i = 0; i < sections[section][field].length; i++)
+          rows.push({tag: section + "-" + field + i, section: section, field: field,
+            value: sections[section][field][i]})
+    return rows
+  }
+
+  function test_invalid_activities(row) {
+    var data = activitiesFixture()
+    var target = row.section === "root" ? data : row.section === "bundle" ? data.activities : data.activities.items[0]
+    target[row.field] = row.value
+    verify(!Model.valid(data))
+    if (row.section === "item" && row.field === "id" && row.value !== undefined) {
+      data = extrasFixture()
+      data.latestActivity.id = row.value
+      verify(!Model.valid(data), "Latest activity uses the same ID contract")
+    }
+  }
+
+  function test_activities_unique_ids() {
+    var data = activitiesFixture()
+    var second = JSON.parse(JSON.stringify(data.activities.items[0]))
+    data.activities.items.push(second)
+    verify(!Model.valid(data), "Duplicate IDs are not separate activities")
+    second.id = "12345678901234567891"
+    verify(Model.valid(data), "Large IDs retain string precision; timestamps need not be unique")
+  }
+
+  function test_connect_links_and_limits() {
+    var data = activitiesFixture(), item = data.activities.items[0]
+    item.connectId = item.id
+    data.latestActivity.id = item.id
+    data.latestActivity.connectId = item.id
+    verify(Model.valid(data))
+    compare(Model.activityUrl(item.connectId), "https://connect.garmin.com/modern/activity/" + item.id)
+    var bad = [undefined, null, 12, "", "1/../../other", "https://example.com", "123?x=1", "123\n"]
+    for (var i = 0; i < bad.length; i++) compare(Model.activityUrl(bad[i]), "")
+    item.connectId = "42"
+    verify(!Model.valid(data), "Connect ID must match the activity identity")
+    delete item.connectId
+    data.latestActivity.connectId = "42"
+    verify(!Model.valid(data))
+    delete data.latestActivity.connectId
+    verify(Model.valid(data), "Imported ID-only activities stay usable without a Connect link")
+    data.activities.items = []
+    for (var n = 0; n < 500; n++) data.activities.items.push(Object.assign({}, item, {id: String(n + 1)}))
+    verify(Model.valid(data))
+    data.activities.items.push(Object.assign({}, item, {id: "501"}))
+    verify(!Model.valid(data), "Bound the public activities bundle")
+  }
+
+  function test_activities_overview_missing_zero() {
+    compare(Model.activitiesOverview(undefined), null)
+    compare(Model.activitiesOverview(null), null)
+    var bundle = activitiesFixture().activities
+    bundle.items = []
+    compare(Model.activitiesOverview(bundle), {count: 0, duration: {value: 0, knownCount: 0},
+      calories: {value: 0, knownCount: 0}, types: []})
+    bundle.items = [{type: "running", durationSeconds: null, distanceMeters: null, calories: null}]
+    compare(Model.activitiesOverview(bundle), {count: 1, duration: {value: null, knownCount: 0},
+      calories: {value: null, knownCount: 0}, types: [{type: "running", count: 1,
+        duration: {value: null, knownCount: 0}, distance: {value: null, knownCount: 0}}]})
+    bundle.items.push({type: "running", durationSeconds: 0, distanceMeters: 0, calories: 0})
+    compare(Model.activitiesOverview(bundle), {count: 2, duration: {value: 0, knownCount: 1},
+      calories: {value: 0, knownCount: 1}, types: [{type: "running", count: 2,
+        duration: {value: 0, knownCount: 1}, distance: {value: 0, knownCount: 1}}]})
+  }
+
+  function test_activities_overview_types() {
+    var bundle = {items: [
+      {type: "running", durationSeconds: 60, distanceMeters: 100, calories: null},
+      {type: "cycling", durationSeconds: 120, distanceMeters: 1000, calories: 20},
+      {type: "running", durationSeconds: null, distanceMeters: 200, calories: 0},
+      {type: "Running", durationSeconds: 30, distanceMeters: null, calories: 10},
+      {type: "cycling", durationSeconds: 0, distanceMeters: null, calories: null}]}
+    var before = JSON.stringify(bundle)
+    compare(Model.activitiesOverview(bundle), {count: 5, duration: {value: 210, knownCount: 4},
+      calories: {value: 30, knownCount: 3}, types: [
+        {type: "cycling", count: 2, duration: {value: 120, knownCount: 2}, distance: {value: 1000, knownCount: 1}},
+        {type: "running", count: 2, duration: {value: 60, knownCount: 1}, distance: {value: 300, knownCount: 2}},
+        {type: "Running", count: 1, duration: {value: 30, knownCount: 1}, distance: {value: null, knownCount: 0}}]})
+    compare(JSON.stringify(bundle), before, "Aggregation does not mutate the source")
+    bundle.items = []
+    var types = ["__proto__", "toString", "trail-running", "trail_running", " running "]
+    for (var i = 0; i < types.length; i++)
+      bundle.items.push({type: types[i], durationSeconds: null, distanceMeters: null, calories: null})
+    var overview = Model.activitiesOverview(bundle)
+    compare(overview.types.map(function(group) { return group.type }), types.slice().sort(),
+      "Exact type strings are grouped safely, without display normalization")
+    compare(overview.distance, undefined, "No overall distance across mixed sports")
+  }
+
+  function test_activities_overview_overflow() {
+    var bundle = {items: [
+      {type: "running", durationSeconds: 1e308, distanceMeters: 1e308, calories: 1e308},
+      {type: "running", durationSeconds: 1e308, distanceMeters: 1e308, calories: 1e308},
+      {type: "running", durationSeconds: 0, distanceMeters: null, calories: 0},
+      {type: "cycling", durationSeconds: 60, distanceMeters: 500, calories: 5}]}
+    compare(Model.activitiesOverview(bundle), {count: 4, duration: {value: null, knownCount: 4},
+      calories: {value: null, knownCount: 4}, types: [
+        {type: "running", count: 3, duration: {value: null, knownCount: 3}, distance: {value: null, knownCount: 2}},
+        {type: "cycling", count: 1, duration: {value: 60, knownCount: 1}, distance: {value: 500, knownCount: 1}}]})
+  }
+
   function test_invalid_extras_data() {
     var rows = []
     var root = {
@@ -299,8 +495,13 @@ TestCase {
         rows.push({tag: field + r, section: "root", field: field, value: root[field][r]})
     var activity = {
       type: [null, undefined, 1, "", " ", "No Activity", "x".repeat(81), "run\n", "run\u202e"],
+      selector: [null, 123, true, {}, [], "", "   ", "x".repeat(257), "x".repeat(256) + "\ud83d\udc1f",
+        "run\u00a0", "run\u200b", "run\u202e", "run\ud800", "run\ue000", "run\u2028"],
       time: [null, undefined, 1, "invalid", "2026-02-30T10:00:00Z"]
     }
+    for (var code = 0; code < 160; code++)
+      if (code < 32 || code >= 127) activity.selector.push("run" + String.fromCharCode(code))
+    activity.gpsSelector = activity.selector.slice()
     var numbers = ["durationSeconds", "distanceMeters", "calories", "bmrCalories", "averageHR", "maxHR",
       "movingDuration", "averageSpeed", "maxSpeed", "elevationGain", "elevationLoss",
       "aerobicTrainingEffect", "anaerobicTrainingEffect", "activityTrainingLoad"]
@@ -346,6 +547,43 @@ TestCase {
     data.supplementalHistoryError = null
     data.stressError = null
     return data
+  }
+
+  function test_optional_source_day_bounds() {
+    var data = wellnessFixture()
+    verify(Model.valid(data), "Old payloads without bounds remain valid")
+    var points = []
+    var kinds = ["metrics", "wellness", "history", "supplementalHistory"]
+    for (var k = 0; k < kinds.length; k++)
+      for (var key in data[kinds[k]]) {
+        var records = data[kinds[k]][key]
+        points = points.concat(Array.isArray(records) ? records : [records])
+      }
+    var ranges = [[0, 1], [-8640000000000000, 8640000000000000],
+      [Date.parse("2026-03-29T00:00:00Z"), Date.parse("2026-03-29T23:00:00Z")],
+      [Date.parse("2026-10-24T23:00:00Z"), Date.parse("2026-10-26T00:00:00Z")]]
+    for (var p = 0; p < points.length; p++) {
+      for (var r = 0; r < ranges.length; r++) {
+        points[p].from = ranges[r][0]
+        points[p].to = ranges[r][1]
+        verify(Model.valid(data), "Valid numeric bounds, including null-valued history days")
+      }
+      delete points[p].from
+      delete points[p].to
+    }
+    var invalid = [[undefined, 1], [0, undefined], [null, 1], [0, null], ["0", 1], [0, "1"],
+      [false, 1], [0, true], [{}, 1], [0, []], [NaN, 1], [0, NaN], [-Infinity, 1], [0, Infinity],
+      [1, 1], [2, 1], [-8640000000000001, 0], [0, 8640000000000001]]
+    for (var i = 0; i < points.length; i++) {
+      for (var b = 0; b < invalid.length; b++) {
+        points[i].from = invalid[b][0]
+        points[i].to = invalid[b][1]
+        verify(!Model.valid(data), "Invalid bounds: point " + i + ", case " + b)
+      }
+      delete points[i].from
+      delete points[i].to
+      verify(Model.valid(data))
+    }
   }
 
   function test_wellness_contract() {

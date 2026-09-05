@@ -15,15 +15,59 @@ function validValue(key, value) {
     && (["bodyBattery", "sleep", "trainingReadiness", "stress"].indexOf(key) < 0 || value <= 100))
 }
 
+function validBounds(point) {
+  return (point.from === undefined && point.to === undefined)
+    || (typeof point.from === "number" && typeof point.to === "number"
+      && isFinite(point.from) && isFinite(point.to) && point.from < point.to
+      && isFinite(new Date(point.from).getTime()) && isFinite(new Date(point.to).getTime()))
+}
+
 function validMetric(key, metric, unit) {
   return !!metric && typeof metric === "object" && !Array.isArray(metric)
     && metric.unit === unit && validValue(key, metric.value)
     && ["fresh", "stale", "missing"].indexOf(metric.state) >= 0
     && (metric.time === null || validTime(metric.time))
     && (metric.date === null || validDate(metric.date))
+    && validBounds(metric)
     && (metric.value === null ? metric.state === "missing" && metric.expiresAt === null
         : metric.state !== "missing" && validTime(metric.time) && validDate(metric.date)
           && validTime(metric.expiresAt) && Date.parse(metric.expiresAt) > Date.parse(metric.time))
+}
+
+function validActivityId(value) {
+  return typeof value === "string" && /^[0-9]{1,32}$/.test(value)
+}
+
+function activityUrl(id) {
+  return validActivityId(id) ? "https://connect.garmin.com/modern/activity/" + id : ""
+}
+
+function validActivities(bundle) {
+  if (bundle === undefined || bundle === null) return true
+  if (typeof bundle !== "object" || Array.isArray(bundle)
+      || !validDate(bundle.startDate) || !validDate(bundle.endDate)
+      || Date.parse(bundle.endDate) - Date.parse(bundle.startDate) !== 6 * 86400000
+      || bundle.from === undefined || bundle.to === undefined || !validBounds(bundle)
+      || !Array.isArray(bundle.items) || bundle.items.length > 500) return false
+  var ids = Object.create(null)
+  var fields = ["durationSeconds", "distanceMeters", "calories"]
+  for (var i = 0; i < bundle.items.length; i++) {
+    var item = bundle.items[i]
+    if (!item || typeof item !== "object" || Array.isArray(item)
+        || !validActivityId(item.id) || ids[item.id] || !validTime(item.time)
+        || (item.connectId !== undefined && (!validActivityId(item.connectId) || item.connectId !== item.id))
+        || Date.parse(item.time) < bundle.from || Date.parse(item.time) >= bundle.to
+        || !validDate(item.date) || item.date < bundle.startDate || item.date > bundle.endDate
+        || typeof item.type !== "string" || !item.type.trim() || item.type.trim() === "No Activity") return false
+    var type = item.type.replace(/[\ud800-\udbff][\udc00-\udfff]/g, "x")
+    if (type.length > 80
+        || /[\x00-\x1f\x7f-\x9f\u00a0\u00ad\u061c\u1680\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ud800-\uf8ff\ufeff\ufff9-\ufffb\ufffe\uffff]/.test(type)
+        || /\udb40[\udc00-\udc7f]|[\udb80-\udbff][\udc00-\udfff]/.test(item.type)) return false
+    for (var f = 0; f < fields.length; f++)
+      if (!validValue(fields[f], item[fields[f]])) return false
+    ids[item.id] = true
+  }
+  return true
 }
 
 function valid(data) {
@@ -62,7 +106,7 @@ function valid(data) {
   var errors = ["query_error", "invalid_response", "truncated_response", "ambiguous_source",
     "source_unavailable", "timeout", "network_error", "auth_error", "http_error",
     "redirect_refused", "response_too_large"]
-  var bundles = ["activity", "history", "wellness", "supplementalHistory", "stress"]
+  var bundles = ["activity", "activities", "history", "wellness", "supplementalHistory", "stress"]
   for (var e = 0; e < bundles.length; e++) {
     var kind = bundles[e]
     var fetched = data[kind + "FetchedAt"]
@@ -70,6 +114,8 @@ function valid(data) {
     if (fetched !== undefined && fetched !== null && !validTime(fetched)) return false
     if (error !== undefined && error !== null && errors.indexOf(error) < 0) return false
   }
+  if (!validActivities(data.activities)
+      || (data.activities !== undefined && data.activities !== null && !validTime(data.activitiesFetchedAt))) return false
   var histories = ["history", "supplementalHistory"]
   for (var b = 0; b < histories.length; b++) {
     var bundle = data[histories[b]]
@@ -81,7 +127,8 @@ function valid(data) {
       if (!Array.isArray(history) || history.length > 7
           || (history.length && !validTime(data[histories[b] + "FetchedAt"]))) return false
       for (var d = 0; d < history.length; d++)
-        if (!history[d] || !validDate(history[d].date) || !validValue(historyKeys[h], history[d].value)) return false
+        if (!history[d] || !validDate(history[d].date) || !validValue(historyKeys[h], history[d].value)
+            || !validBounds(history[d])) return false
     }
   }
   if (data.stressSeries !== undefined) {
@@ -93,11 +140,22 @@ function valid(data) {
   }
   var activity = data.latestActivity
   if (activity !== undefined && activity !== null) {
+    if (activity.id !== undefined && !validActivityId(activity.id)) return false
+    if (activity.connectId !== undefined && (!validActivityId(activity.connectId) || activity.connectId !== activity.id)) return false
     if (typeof activity !== "object" || Array.isArray(activity) || !validTime(activity.time)
         || !validTime(data.activityFetchedAt) || typeof activity.type !== "string"
         || !activity.type.trim() || activity.type.trim() === "No Activity"
         || activity.type.replace(/[\ud800-\udbff][\udc00-\udfff]/g, "x").length > 80
         || /[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u206f]/.test(activity.type)) return false
+    var selectors = ["selector", "gpsSelector"]
+    for (var g = 0; g < selectors.length; g++) {
+      var selector = activity[selectors[g]]
+      if (selector === undefined) continue
+      if (typeof selector !== "string" || !selector.trim()
+          || selector.replace(/[\ud800-\udbff][\udc00-\udfff]/g, "x").length > 256
+          || /[\x00-\x1f\x7f-\x9f\u00a0\u00ad\u1680\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ud800-\uf8ff\ufeff\ufff9-\ufffb\ufffe\uffff]/.test(
+            selector.replace(/[\ud800-\udbff][\udc00-\udfff]/g, "x"))) return false
+    }
     var fields = ["durationSeconds", "distanceMeters", "calories", "bmrCalories", "averageHR", "maxHR",
       "movingDuration", "averageSpeed", "maxSpeed", "elevationGain", "elevationLoss",
       "aerobicTrainingEffect", "anaerobicTrainingEffect", "activityTrainingLoad"]
@@ -161,6 +219,40 @@ function activityName(type) {
   if (typeof type !== "string" || !type.trim()) return "Activity"
   return type.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ").toLowerCase()
     .replace(/\b\w/g, function(letter) { return letter.toUpperCase() })
+}
+
+function activitiesOverview(bundle) {
+  if (bundle === undefined || bundle === null) return null
+  var result = {count: bundle.items.length, duration: {value: 0, knownCount: 0},
+    calories: {value: 0, knownCount: 0}, types: []}
+  var groups = Object.create(null)
+  var totals = [result.duration, result.calories]
+  for (var i = 0; i < bundle.items.length; i++) {
+    var item = bundle.items[i]
+    var group = groups[item.type]
+    if (!group) {
+      group = {type: item.type, count: 0, duration: {value: 0, knownCount: 0},
+        distance: {value: 0, knownCount: 0}}
+      groups[item.type] = group
+      result.types.push(group)
+      totals.push(group.duration, group.distance)
+    }
+    group.count++
+    var targets = [result.duration, result.calories, group.duration, group.distance]
+    var values = [item.durationSeconds, item.calories, item.durationSeconds, item.distanceMeters]
+    for (var v = 0; v < values.length; v++) {
+      if (typeof values[v] !== "number" || !isFinite(values[v]) || values[v] < 0) continue
+      targets[v].value += values[v]
+      targets[v].knownCount++
+    }
+  }
+  // Keep overflow unknown, without losing how many measurements contributed.
+  for (var t = 0; t < totals.length; t++)
+    if ((result.count && !totals[t].knownCount) || !isFinite(totals[t].value)) totals[t].value = null
+  result.types.sort(function(a, b) {
+    return b.count - a.count || (a.type < b.type ? -1 : a.type > b.type ? 1 : 0)
+  })
+  return result
 }
 
 function numeric(value) {

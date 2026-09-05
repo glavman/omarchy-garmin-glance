@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
+import "Grafana.js" as Grafana
 
 Item {
   id: root
@@ -48,7 +49,9 @@ Item {
   function ensureCharts() {
     wantCharts = true
     if (busy && !requestCharts) { pendingCharts = true; return }
-    if (!payload || !payload.historyFetchedAt || now - Date.parse(payload.historyFetchedAt) > refreshMinutes * 60000)
+    if (!payload || !payload.historyFetchedAt || now - Date.parse(payload.historyFetchedAt) > refreshMinutes * 60000
+        || !payload.activities || !payload.activitiesFetchedAt
+        || now - Date.parse(payload.activitiesFetchedAt) > refreshMinutes * 60000 || now >= payload.activities.to)
       refresh(true)
   }
   function reset() {
@@ -60,12 +63,21 @@ Item {
     if (busy) { restartPending = true; worker.signal(9) }
     else execute(initializing ? "cache" : "fetch", true)
   }
-  function openGrafana() {
-    var url = String(settings.grafanaUrl || "http://127.0.0.1:3000")
-    if (!/^https?:\/\/[^\s/@]+(?::[0-9]+)?(?:[/?#][^\s]*)?$/.test(url)) {
-      message = "Set a valid http(s) Grafana URL in bar settings."
+  function openGrafana(context) {
+    if (context !== undefined && demoMode) {
+      message = "Context links are unavailable for demo data."
       return
     }
+    var link = Grafana.build(String(settings.grafanaUrl || "http://127.0.0.1:3000"), payload, context)
+    if (link.error) { message = link.error; return }
+    message = ""
+    Quickshell.execDetached(["/usr/bin/xdg-open", link.url])
+  }
+  function openActivity(id) {
+    if (demoMode) { message = "Activity links are unavailable for demo data."; return }
+    var url = Model.activityUrl(id)
+    if (!url) { message = "This activity has no valid Garmin Connect ID. Refresh to try again."; return }
+    message = ""
     Quickshell.execDetached(["/usr/bin/xdg-open", url])
   }
   onDemoModeChanged: if (shell) startup.restart()
@@ -122,6 +134,8 @@ Item {
         message: root.message, chartsLoaded: !!root.payload && !!root.payload.chartsFetchedAt,
         historyLoaded: !!root.payload && !!root.payload.historyFetchedAt,
         activityAvailable: !!root.payload && !!root.payload.latestActivity,
+        activitiesLoaded: !!root.payload && !!root.payload.activities,
+        activitiesError: root.payload ? root.payload.activitiesError : null,
         activityError: root.payload ? root.payload.activityError : null,
         historyError: root.payload ? root.payload.historyError : null,
         wellnessError: root.payload ? root.payload.wellnessError : null,

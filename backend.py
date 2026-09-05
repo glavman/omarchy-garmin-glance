@@ -72,6 +72,8 @@ ACTIVITY_DETAILS = ("averageHR", "maxHR", "movingDuration", "averageSpeed", "max
 ACTIVITY_FIELDS = {"type": "activityType", "durationSeconds": "elapsedDuration",
                    "distanceMeters": "distance", "calories": "calories", "bmrCalories": "bmrCalories",
                    **{field: field for field in ACTIVITY_DETAILS}}
+ACTIVITIES_FIELDS = {key: ACTIVITY_FIELDS[key] for key in
+                     ("type", "durationSeconds", "distanceMeters", "calories")}
 OPTIONAL_ERRORS = {"query_error", "invalid_response", "truncated_response", "ambiguous_source",
                    "source_unavailable", "timeout", "network_error", "auth_error", "http_error",
                    "redirect_refused", "response_too_large"}
@@ -184,6 +186,7 @@ def empty(now, zone, status="error", error=None):
             "history": {key: [] for key in HISTORY_FIELDS}, "historyFetchedAt": None,
             "latestActivity": None, "activityFetchedAt": None,
             "activityError": None, "historyError": None,
+            "activities": None, "activitiesFetchedAt": None, "activitiesError": None,
             "wellness": {key: {"value": None, "time": None, "date": None,
                                 "state": "missing", "unit": spec[2], "expiresAt": None}
                          for key, spec in WELLNESS.items()},
@@ -455,16 +458,125 @@ def optional_source(source, config):
     return None
 
 
+def activity_connect_id(value, activity_id):
+    if type(value) is int and 0 < value < 10**32:
+        value = str(value)
+    if (isinstance(value, str) and 1 <= len(value) <= 32
+            and all("0" <= c <= "9" for c in value) and int(value) > 0 and value == activity_id):
+        return value
+    return None
+
+
 def activity_summary(row, since, until):
+    # Upstream's selected non-placeholder row is timestamped at activity start.
     when = timestamp(row["time"])
     kind = row.get("activityType")
     if (not since <= when <= until or not isinstance(kind, str) or not kind.strip()
             or len(kind) > 80 or not kind.isprintable() or kind.strip() == "No Activity"):
         raise ValueError("activity")
-    return {"time": iso(when), "type": kind,
+    selector = {}
+    if "ActivityID" in row:
+        value = row["ActivityID"]
+        if not isinstance(value, str) or not 1 <= len(value) <= 32 or not all("0" <= c <= "9" for c in value):
+            raise ValueError("activity id")
+        selector["id"] = value
+        # The manual FIT importer hashes ActivityID; only the normal collector
+        # also writes the original Garmin ID in the Activity_ID field.
+        connect_id = activity_connect_id(row.get("Activity_ID"), value)
+        if connect_id is not None:
+            selector["connectId"] = connect_id
+    for field, key in (("ActivitySelector", "selector"), ("gpsSelector", "gpsSelector")):
+        if field in row:
+            value = row[field]
+            if not isinstance(value, str) or not value.strip() or len(value) > 256 or not value.isprintable():
+                raise ValueError("activity selector")
+            selector[key] = value
+    return {"time": iso(when), "type": kind, **selector,
             **{key: row.get(field) if number(row.get(field), field)
                and (field not in ("averageHR", "maxHR", "averageSpeed", "maxSpeed") or row[field] > 0) else None
                 for key, field in ACTIVITY_FIELDS.items() if key != "type"}}
+
+
+def activities_bundle(rows, fetched, zone):
+    today = fetched.astimezone(zone).date()
+    start = datetime.combine(today - timedelta(days=6), time(), zone)
+    end = datetime.combine(today + timedelta(days=1), time(), zone)
+    if len(rows) > 500:
+        raise Failure("truncated_response")
+    versions, latest = {}, {}
+    for row in rows:
+        summary = activity_summary(row, start, fetched)
+        item = {"id": summary["id"], "time": summary["time"],
+                "date": timestamp(summary["time"]).astimezone(zone).date().isoformat(),
+                **{key: summary[key] for key in ACTIVITIES_FIELDS}}
+        if "connectId" in summary:
+            item["connectId"] = summary["connectId"]
+        version = (item["id"], item["time"])
+        if version in versions and versions[version] != item:
+            previous_version = versions[version]
+            if ({k: v for k, v in previous_version.items() if k != "connectId"}
+                    != {k: v for k, v in item.items() if k != "connectId"}):
+                raise ValueError("conflicting activity")
+            # Conflicting provenance only disables the link, not the activity.
+            previous_version.pop("connectId", None)
+            item.pop("connectId", None)
+        versions[version] = item
+        previous = latest.get(item["id"])
+        if previous is None or timestamp(item["time"]) > timestamp(previous["time"]):
+            latest[item["id"]] = item
+    # Stable ID tie-breaking makes the output independent of response row order.
+    items = sorted(latest.values(), key=lambda item: (-timestamp(item["time"]).timestamp(), item["id"]))
+    return {"startDate": start.date().isoformat(), "endDate": today.isoformat(),
+            "from": int(start.timestamp() * 1000), "to": int(end.timestamp() * 1000), "items": items}
+
+
+def gps_selector(config, tags, activity_id, since, until, deadline):
+    try:
+        if (not isinstance(activity_id, str) or not activity_id.strip()
+                or len(activity_id) > 256 or not activity_id.isprintable()):
+            return None
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return None
+        expected = {**tags, "ActivityID": activity_id}
+        conditions = ["time >= '" + iso(since) + "'", "time <= '" + iso(until) + "'"]
+        conditions.extend(quoted(k, '"') + " = " + quoted(v, "'") for k, v in sorted(expected.items()))
+        # FIT's selector uses its first record time, not the summary start time.
+        payload = request(config, 'SELECT *::field FROM "ActivityGPS" WHERE ' + " AND ".join(conditions)
+                          + " GROUP BY * ORDER BY time ASC LIMIT 1 SLIMIT 2", timeout=min(TIMEOUT, remaining))
+        if not isinstance(payload, dict) or "error" in payload:
+            return None
+        items = payload["results"]
+        if not isinstance(items, list) or len(items) != 1:
+            return None
+        item = items[0]
+        if (not isinstance(item, dict) or type(item.get("statement_id")) is not int
+                or item["statement_id"] != 0 or "error" in item or item.get("partial")):
+            return None
+        series = item.get("series", [])
+        if not isinstance(series, list) or len(series) != 1:
+            return None
+        entry = series[0]
+        if not isinstance(entry, dict) or entry.get("name") != "ActivityGPS" or entry.get("partial"):
+            return None
+        row_tags = entry["tags"]
+        if not isinstance(row_tags, dict):
+            return None
+        selector = row_tags.get("ActivitySelector")
+        if (not isinstance(selector, str) or not selector.strip() or len(selector) > 256
+                or not selector.isprintable()
+                or {k: v for k, v in row_tags.items() if k != "ActivitySelector"} != expected):
+            return None
+        columns, values = entry["columns"], entry["values"]
+        if (not isinstance(columns, list) or not all(isinstance(c, str) for c in columns)
+                or len(set(columns)) != len(columns) or "time" not in columns
+                or not isinstance(values, list) or len(values) != 1
+                or not isinstance(values[0], list) or len(values[0]) != len(columns)
+                or not since <= timestamp(values[0][columns.index("time")]) <= until):
+            return None
+        return selector
+    except (Failure, KeyError, ValueError, TypeError, OverflowError, RecursionError):
+        return None
 
 
 def fetch_extras(config, now, charts, source, deadline, result, cached=None):
@@ -473,7 +585,7 @@ def fetch_extras(config, now, charts, source, deadline, result, cached=None):
     today = now.astimezone(zone).date()
     start = datetime.combine(today - timedelta(days=7), time(), zone)
     end = datetime.combine(today, time(), zone)
-    jobs = [("activity", [("ActivitySummary", tuple(ACTIVITY_FIELDS.values()))], ())]
+    jobs = [("activity", [("ActivitySummary", (*ACTIVITY_FIELDS.values(), "Activity_ID"))], ())]
     if charts:
         jobs.append(("history", [("DailyStats", ("bodyBatteryHighestValue", "totalSteps")),
                                   ("SleepSummary", ("sleepScore", "avgOvernightHrv"))], ()))
@@ -488,7 +600,9 @@ def fetch_extras(config, now, charts, source, deadline, result, cached=None):
             ("TrainingReadiness", ("score",), ("trainingReadiness",))))
         jobs.append(("stressHistory", [("StressIntraday", ("stressLevel",))] * 7, ("stress",)))
         jobs.append(("stress", [("StressIntraday", ("stressLevel",))], ()))
+        jobs.append(("activities", [("ActivitySummary", (*ACTIVITIES_FIELDS.values(), "Activity_ID"))], ()))
     failed = {kind: set() for kind in ("wellness", "supplementalHistory", "stress")}
+    activity_id = None
     for kind, specs, keys in jobs:
         stress_history = kind == "stressHistory"
         if stress_history:
@@ -500,13 +614,19 @@ def fetch_extras(config, now, charts, source, deadline, result, cached=None):
             if remaining <= 0:
                 raise Failure("timeout")
             activity = kind == "activity"
+            activities = kind == "activities"
+            activity_rows = activity or activities
             daily = kind in ("history", "supplementalHistory")
             since, until = ((start, end) if daily else
                             (now - (timedelta(days=365) if activity else timedelta(days=30)
                                     if kind == "wellness" else timedelta(hours=24)), now))
             if kind == "stress":
                 since = min(since, end)
+            if activities:
+                since = datetime.combine(today - timedelta(days=6), time(), zone)
             limit = 1 if activity or kind == "wellness" or stress_history else 2000 if kind == "stress" else 999
+            if activities:
+                limit = 500
             statements = []
             for index, (name, fields) in enumerate(specs):
                 if stress_history:
@@ -515,7 +635,7 @@ def fetch_extras(config, now, charts, source, deadline, result, cached=None):
                 conditions = ["time >= '" + iso(since) + "'",
                               "time " + ("<" if daily else "<=") + " '" + iso(until) + "'"]
                 conditions.extend(quoted(k, '"') + " = " + quoted(v, "'") for k, v in sorted(tags.items()))
-                if activity:
+                if activity_rows:
                     conditions.append('"activityType" != \'No Activity\'')
                 if stress_history:
                     conditions.extend(('"stressLevel" >= 0', '"stressLevel" <= 100'))
@@ -526,10 +646,11 @@ def fetch_extras(config, now, charts, source, deadline, result, cached=None):
                 # Activity IDs are tags: GROUP BY * would make LIMIT 1 per activity.
                 statements.append("SELECT " + ('MEAN("stressLevel") AS "stressLevel"' if stress_history else
                                                ",".join(quoted(f, '"') for f in fields))
-                                  + (",*::tag" if activity else "") + " FROM " + quoted(name, '"')
+                                  + (",*::tag" if activity_rows else "") + " FROM " + quoted(name, '"')
                                   + " WHERE " + " AND ".join(conditions)
                                   + (" GROUP BY * SLIMIT 2" if stress_history else
-                                     " ORDER BY time DESC LIMIT 1" if activity else
+                                      " ORDER BY time DESC LIMIT 1" if activity else
+                                      " ORDER BY time DESC LIMIT 501" if activities else
                                      " GROUP BY * ORDER BY time DESC LIMIT "
                                      + str(limit + int(daily or kind == "stress")) + " SLIMIT 2"))
             payload = request(config, ";".join(statements), timeout=min(TIMEOUT, remaining))
@@ -570,19 +691,19 @@ def fetch_extras(config, now, charts, source, deadline, result, cached=None):
                             or len(set(columns)) != len(columns) or "time" not in columns
                             or not isinstance(values, list)
                             or (stress_history and set(columns) != {"time", "stressLevel"})
-                            or (not activity and set(columns) - {"time", *fields})):
+                            or (not activity_rows and set(columns) - {"time", *fields})):
                         raise ValueError("columns")
                     if len(values) > limit:
                         # At the history cap, completeness cannot be established.
                         raise Failure("truncated_response")
-                    if not activity and entry_tags != tags:
+                    if not activity_rows and entry_tags != tags:
                         raise Failure("ambiguous_source")
                     for values_row in values:
                         if not isinstance(values_row, list) or len(values_row) != len(columns):
                             raise ValueError("row")
                         row = dict(zip(columns, values_row))
                         row_tags = dict(entry_tags)
-                        if activity:
+                        if activity_rows:
                             for key in set(columns) - {"time", *fields}:
                                 value = row[key]
                                 if value is None:
@@ -590,10 +711,18 @@ def fetch_extras(config, now, charts, source, deadline, result, cached=None):
                                 if not isinstance(value, str) or (key in row_tags and row_tags[key] != value):
                                     raise ValueError("tag column")
                                 row_tags[key] = value
-                            row_tags = {k: v for k, v in row_tags.items()
-                                        if k not in ("ActivityID", "ActivitySelector")}
+                            selector = row_tags.pop("ActivitySelector", None)
+                            row_id = row_tags.pop("ActivityID", None)
                             if row_tags != tags:
                                 raise Failure("ambiguous_source")
+                            row.pop("ActivitySelector", None)
+                            row.pop("ActivityID", None)
+                            if row_id is not None:
+                                row["ActivityID"] = row_id
+                            if activity:
+                                activity_id = row_id
+                            if activity and selector is not None:
+                                row["ActivitySelector"] = selector
                         when = timestamp(row["time"])
                         if stress_history:
                             # Ungrouped aggregates use the lower bound or Influx's
@@ -609,6 +738,8 @@ def fetch_extras(config, now, charts, source, deadline, result, cached=None):
                         rows.append(row)
             if activity:
                 result["latestActivity"] = activity_summary(rows[0], since, until) if rows else None
+            elif activities:
+                result["activities"] = activities_bundle(rows, now, zone)
             elif kind == "wellness":
                 if rows:
                     row = rows[0]
@@ -660,6 +791,10 @@ def fetch_extras(config, now, charts, source, deadline, result, cached=None):
             result[kind + "Error"] = "invalid_response"
             if kind in failed:
                 failed[kind].update(keys or ("stressSeries",))
+    if result["latestActivity"] is not None and tags is not None:
+        selector = gps_selector(config, tags, activity_id, now - timedelta(days=365), now, deadline)
+        if selector is not None:
+            result["latestActivity"]["gpsSelector"] = selector
     if cached is not None:
         for kind, fields in failed.items():
             skipped = not charts and kind != "wellness"
@@ -734,13 +869,13 @@ def read_cache(path, key, config, now):
                     return None
                 coordinate = iso(timestamp(point[axis])) if axis == "time" else datetime.strptime(point[axis], "%Y-%m-%d").date().isoformat()
                 clean["charts"][chart].append({axis: coordinate, "value": point["value"]})
-        for kind in ("activity", "history", "wellness", "supplementalHistory", "stress"):
+        for kind in ("activity", "activities", "history", "wellness", "supplementalHistory", "stress"):
             error = result.get(kind + "Error")
             if error is not None and (not isinstance(error, str) or error not in OPTIONAL_ERRORS):
                 return None
             clean[kind + "Error"] = error
         if optional_source(envelope["source"], config) is not None:
-            for kind in ("activity", "history"):
+            for kind in ("activity", "activities", "history"):
                 fetched = result.get(kind + "FetchedAt")
                 if fetched is not None:
                     fetched = timestamp(fetched)
@@ -754,7 +889,40 @@ def read_cache(path, key, config, now):
                             return None
                         row = {field: activity.get(key) for key, field in ACTIVITY_FIELDS.items()}
                         row["time"] = activity["time"]
+                        if "id" in activity:
+                            row["ActivityID"] = activity["id"]
+                        if "connectId" in activity:
+                            marker = activity["connectId"]
+                            if not isinstance(marker, str) or activity_connect_id(marker, activity.get("id")) != marker:
+                                return None
+                            row["Activity_ID"] = marker
+                        if "selector" in activity:
+                            row["ActivitySelector"] = activity["selector"]
+                        if "gpsSelector" in activity:
+                            row["gpsSelector"] = activity["gpsSelector"]
                         clean["latestActivity"] = activity_summary(row, fetched - timedelta(days=365), fetched)
+                elif kind == "activities":
+                    bundle = result.get(kind)
+                    if bundle is not None:
+                        if (not isinstance(bundle, dict) or fetched is None
+                                or not isinstance(bundle.get("items"), list) or len(bundle["items"]) > 500):
+                            return None
+                        rows = []
+                        for item in bundle["items"]:
+                            if "connectId" in item:
+                                marker = item["connectId"]
+                                if not isinstance(marker, str) or activity_connect_id(marker, item["id"]) != marker:
+                                    return None
+                            rows.append({"ActivityID": item["id"], "time": item["time"],
+                                         "Activity_ID": item.get("connectId"),
+                                         **{field: item.get(key) for key, field in ACTIVITIES_FIELDS.items()}})
+                        rebuilt = activities_bundle(rows, fetched, ZoneInfo(config["timezone"]))
+                        if (bundle["startDate"] != rebuilt["startDate"] or bundle["endDate"] != rebuilt["endDate"]
+                                or len(rebuilt["items"]) != len(rows)
+                                or any(item["date"] != timestamp(item["time"]).astimezone(
+                                    ZoneInfo(config["timezone"])).date().isoformat() for item in bundle["items"])):
+                            return None
+                        clean[kind] = rebuilt
                 else:
                     history = result.get("history", {key: [] for key in HISTORY_FIELDS})
                     if not isinstance(history, dict) or set(history) != set(HISTORY_FIELDS):
@@ -855,6 +1023,27 @@ def write_cache(path, key, result, source):
                 pass
 
 
+def source_day_bounds(result):
+    zone = ZoneInfo(result["timezone"])
+    for kind in ("metrics", "wellness", "history", "supplementalHistory"):
+        for records in result[kind].values():
+            for point in records if isinstance(records, list) else [records]:
+                point.pop("from", None)
+                point.pop("to", None)
+                if point.get("date") is None:
+                    continue
+                start = datetime.combine(datetime.strptime(point["date"], "%Y-%m-%d").date(), time(), zone)
+                try:
+                    # Local calendar arithmetic, not 24 hours of UTC, preserves DST.
+                    end = start + timedelta(days=1)
+                except OverflowError:
+                    continue
+                lower, upper = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+                if lower < upper:
+                    point.update({"from": lower, "to": upper})
+    return result
+
+
 def run(command, config, now, charts=False):
     if command == "doctor":
         result, _ = fetch(config, now, extras=False)
@@ -885,12 +1074,13 @@ def run(command, config, now, charts=False):
                     if (previous is not None and source == previous["source"]
                             and optional_source(source, config) is not None
                             and any(m["value"] is not None for m in result["metrics"].values())):
-                        for kind, field in (("activity", "latestActivity"), ("history", "history")):
-                            if result[kind + "Error"] is not None or (kind == "history" and not charts):
+                        for kind, field in (("activity", "latestActivity"), ("history", "history"),
+                                            ("activities", "activities")):
+                            if result[kind + "Error"] is not None or (kind != "activity" and not charts):
                                 result[field] = copy.deepcopy(previous["data"][field])
                                 result[kind + "FetchedAt"] = previous["data"][kind + "FetchedAt"]
-                                if kind == "history" and not charts:
-                                    result["historyError"] = previous["data"]["historyError"]
+                                if kind != "activity" and not charts:
+                                    result[kind + "Error"] = previous["data"][kind + "Error"]
                     if previous is not None and (source is None or source == previous["source"]):
                         source = previous["source"]
                         result["device"] = device_from_source(source)
@@ -927,7 +1117,10 @@ def run(command, config, now, charts=False):
             result["stressSeries"] = []
             result["stressFetchedAt"] = None
             result["stressError"] = None
-        return result
+            result["activities"] = None
+            result["activitiesFetchedAt"] = None
+            result["activitiesError"] = None
+        return source_day_bounds(result)
 
 
 def demo(now, charts):
@@ -942,12 +1135,19 @@ def demo(now, charts):
         result["wellness"][key].update(value=value, time=iso(when))
     result["wellnessFetchedAt"] = iso(now)
     refresh_states(result, now)
-    result["latestActivity"] = {"time": iso(now - timedelta(hours=2)), "type": "Running",
+    result["latestActivity"] = {"id": "9000000000000001", "time": iso(now - timedelta(hours=2)), "type": "Running",
                                 "durationSeconds": 1800, "distanceMeters": 5000,
                                 "calories": 350, "bmrCalories": 40,
                                 **dict(zip(ACTIVITY_DETAILS, (142, 168, 1750, 2.8, 4.1, 35, 32, 3.2, 1.1, 85)))}
     result["activityFetchedAt"] = iso(now)
     if charts:
+        result["activities"] = activities_bundle([
+            {"ActivityID": "900000000000000" + str(n + 1),
+             "time": result["latestActivity"]["time"] if n == 0 else iso(now - timedelta(days=n)),
+             "activityType": "Running" if n % 2 == 0 else "Walking", "elapsedDuration": 1800 + n * 300,
+             "distance": 5000 if n % 2 == 0 else 2500, "calories": 350 if n % 2 == 0 else 150}
+            for n in (0, 1, 3, 6)], now, zone)
+        result["activitiesFetchedAt"] = iso(now)
         result["supplementalHistoryFetchedAt"] = iso(now)
         result["stressFetchedAt"] = iso(now)
         for key, metric in result["wellness"].items():
@@ -971,7 +1171,7 @@ def demo(now, charts):
         for key, value in (("steps", 4321), ("sleep", 82)):
             result["charts"][key] = [{"date": (now.astimezone(zone).date() - timedelta(days=n)).isoformat(),
                                        "value": value - n} for n in range(6, -1, -1)]
-    return result
+    return source_day_bounds(result)
 
 
 class Parser(argparse.ArgumentParser):

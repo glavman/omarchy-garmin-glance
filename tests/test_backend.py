@@ -40,7 +40,8 @@ def payload(now=NOW, charts=False, tags=None):
 def activity_payload(tags=None, **fields):
     row = {"time": b.iso(NOW - timedelta(hours=1)), "activityType": "running",
            "elapsedDuration": 1800, "distance": 5000, "calories": 350, "bmrCalories": 40,
-           **(TAGS if tags is None else tags), "ActivityID": "123", "ActivitySelector": "synthetic",
+            **(TAGS if tags is None else tags), "ActivityID": "123", "Activity_ID": 123,
+            "ActivitySelector": "synthetic",
            **fields}
     return {"results": [{"statement_id": 0, "series": [{"name": "ActivitySummary",
                          "columns": list(row), "values": [list(row.values())]}]}]}
@@ -53,6 +54,19 @@ def history_payload(daily=None, sleep=None, tags=None):
         for index, (name, fields, rows) in enumerate([
             ("DailyStats", ("bodyBatteryHighestValue", "totalSteps"), daily),
              ("SleepSummary", ("sleepScore", "avgOvernightHrv"), sleep)])]}
+
+
+def activities_payload(*rows, tags=None):
+    fields = ("activityType", "elapsedDuration", "distance", "calories")
+    columns = ["time", *fields, *(TAGS if tags is None else tags), "ActivityID", "ActivitySelector", "Activity_ID"]
+    values = []
+    for fields_row in rows:
+        row = {"time": b.iso(NOW), "activityType": "running", "elapsedDuration": 1800,
+               "distance": 5000, "calories": 350, **(TAGS if tags is None else tags),
+               "ActivityID": "123", "ActivitySelector": "synthetic", "Activity_ID": 123, **fields_row}
+        values.append([row.get(key) for key in columns])
+    return {"results": [{"statement_id": 0, "series": [
+        {"name": "ActivitySummary", "columns": columns, "values": values}]}]}
 
 
 def supplemental_payload(name, fields, rows=(), tags=None):
@@ -77,13 +91,17 @@ class BackendTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 query = parse_qs(urlsplit(self.path).query)["q"][0]
-                optional = ("activity" if query.startswith('SELECT "activityType"') else
+                optional = ("gps" if 'FROM "ActivityGPS"' in query else
+                            "activities" if query.endswith("ORDER BY time DESC LIMIT 501") else
+                            "activity" if query.startswith('SELECT "activityType"') else
                             "history" if query.startswith('SELECT "bodyBatteryHighestValue"') else None)
                 supplemental = query.startswith('SELECT MEAN(') or any(
                     query.startswith('SELECT "' + field + '"') for field in
                     ("sleepTimeSeconds", "restingHeartRate", "score", "stressLevel"))
                 # Keep the original base-query/recovery assertions independent of extras.
-                (cls.supplemental_requests if supplemental else cls.optional_requests if optional else cls.requests).append(
+                (cls.gps_requests if optional == "gps" else cls.activities_requests if optional == "activities"
+                 else cls.supplemental_requests if supplemental
+                 else cls.optional_requests if optional else cls.requests).append(
                     (self.command, self.path, dict(self.headers)))
                 self.send_response(cls.http_status)
                 if cls.http_status == 302:
@@ -137,6 +155,10 @@ class BackendTests(unittest.TestCase):
         type(self).response = payload()
         type(self).requests = []
         type(self).optional_requests = []
+        type(self).gps_requests = []
+        type(self).activities_requests = []
+        type(self).activities_response = {"results": [{"statement_id": 0}]}
+        type(self).gps_response = {"results": [{"statement_id": 0}]}
         type(self).supplemental_requests = []
         type(self).supplemental_response = staticmethod(lambda query: {
             "results": [{"statement_id": n} for n in range(query.count('SELECT MEAN(') or 1)]})
@@ -299,6 +321,103 @@ class BackendTests(unittest.TestCase):
         b.refresh_states(result, NOW)
         self.assertIsNone(result["metrics"]["steps"]["expiresAt"])
         self.assertTrue(all(m["expiresAt"] is not None for m in b.demo(NOW, True)["metrics"].values()))
+
+    def test_source_day_bounds_fetch_cache_and_dst(self):
+        for day, start, end, hours in (
+                ("2026-03-29", "2026-03-29T00:00:00Z", "2026-03-29T23:00:00Z", 23),
+                ("2026-10-25", "2026-10-24T23:00:00Z", "2026-10-26T00:00:00Z", 25)):
+            with self.subTest(day=day):
+                now = b.timestamp(end) + timedelta(hours=1)
+                sample = b.timestamp(start) + timedelta(hours=12)
+                type(self).response = payload(sample, charts=True)
+                self.wellness_fixture(sample)
+                type(self).history_response = history_payload(daily=[[b.iso(sample), 0, 0]])
+                expected = {"from": int(b.timestamp(start).timestamp() * 1000),
+                            "to": int(b.timestamp(end).timestamp() * 1000)}
+                for command in ("fetch", "cache"):
+                    result = b.run(command, self.config, now, charts=True)
+                    self.assertEqual(result["schemaVersion"], 1)
+                    self.assertNotEqual(result["sourceDate"], day)
+                    for kind in ("metrics", "wellness", "history", "supplementalHistory"):
+                        for records in result[kind].values():
+                            point = records[-1] if isinstance(records, list) else records
+                            self.assertEqual(point["date"], day)
+                            self.assertEqual({key: point[key] for key in expected}, expected)
+                            self.assertEqual(point["to"] - point["from"], hours * 3600000)
+                    self.assertIsNone(result["history"]["sleep"][-1]["value"])
+                    self.assertEqual(result["metrics"]["steps"]["value"], 0)
+
+    def test_source_day_bounds_old_cache_and_retained_series(self):
+        type(self).response = payload(charts=True)
+        self.wellness_fixture()
+        initial = b.run("fetch", self.config, NOW, charts=True)
+        path, identity = b.cache_location(self.config)
+        original = json.loads(path.read_text())
+        later = NOW + timedelta(days=2)
+        for forged in (False, True):
+            envelope = copy.deepcopy(original)
+            for kind in ("metrics", "wellness", "history", "supplementalHistory"):
+                for records in envelope["data"][kind].values():
+                    for point in records if isinstance(records, list) else [records]:
+                        if forged:
+                            point.update({"from": "private-forged", "to": 1, "secret": "private-tag"})
+                        else:
+                            point.pop("from", None)
+                            point.pop("to", None)
+            path.write_text(json.dumps(envelope))
+            cached = b.run("cache", self.config, later, charts=True)
+            self.assertNotIn("private-", json.dumps(cached))
+            for kind in ("history", "supplementalHistory"):
+                self.assertEqual(cached[kind], initial[kind])
+            for kind in ("metrics", "wellness"):
+                for key, point in cached[kind].items():
+                    self.assertEqual(point["from"], initial[kind][key]["from"])
+                    self.assertEqual(point["to"], initial[kind][key]["to"])
+        type(self).response = payload(later, charts=True)
+        self.wellness_fixture(later)
+        healthy = type(self).supplemental_response
+        type(self).supplemental_response = staticmethod(lambda query: (
+            {"error": "private-error"} if 'FROM "TrainingReadiness"' in query else healthy(query)))
+        type(self).history_response = {"error": "private-error"}
+        retained = b.run("fetch", self.config, later, charts=True)
+        self.assertEqual(retained["history"], initial["history"])
+        self.assertEqual(retained["supplementalHistory"]["trainingReadiness"],
+                         initial["supplementalHistory"]["trainingReadiness"])
+        self.assertEqual(retained["wellness"]["trainingReadiness"]["from"],
+                         initial["wellness"]["trainingReadiness"]["from"])
+        self.assertGreater(retained["supplementalHistory"]["sleepDuration"][-1]["from"],
+                           retained["supplementalHistory"]["trainingReadiness"][-1]["from"])
+        cached = b.run("cache", self.config, later, charts=True)
+        self.assertEqual(cached["supplementalHistory"], retained["supplementalHistory"])
+        self.assertNotIn("private-", json.dumps(retained))
+
+    def test_source_day_bounds_null_metrics_and_cli_output(self):
+        type(self).response = payload(charts=True)
+        self.response["results"][0]["series"][0]["values"][0][1] = None
+        self.response["results"][1].pop("series")
+        config = self.config_file({"url": self.url})
+        with patch.object(b, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = NOW
+            for command in ("fetch", "cache"):
+                code, result = self.cli(command, "--config", str(config), "--charts")
+                self.assertEqual(code, 0)
+                missing = result["metrics"]["steps"]
+                self.assertIsNone(missing["value"])
+                self.assertIsNone(missing["date"])
+                self.assertNotIn("from", missing)
+                self.assertNotIn("to", missing)
+                dated = result["metrics"]["bodyBattery"]
+                self.assertIsNone(dated["value"])
+                self.assertEqual(dated["state"], "missing")
+                self.assertEqual(dated["date"], "2026-09-05")
+                self.assertEqual(dated["from"], 1788562800000)
+                self.assertEqual(dated["to"], 1788649200000)
+                for point in result["wellness"].values():
+                    self.assertNotIn("from", point)
+                    self.assertNotIn("to", point)
+        demo = b.demo(NOW, True)
+        self.assertIn("from", demo["metrics"]["steps"])
+        self.assertIn("to", demo["supplementalHistory"]["sleepDuration"][-1])
 
     def test_steps_expiry_uses_source_midnight_across_dst(self):
         for sample, expiry, hours in (("2026-03-29T00:00:00Z", "2026-03-29T23:00:00Z", 23),
@@ -832,6 +951,7 @@ class BackendTests(unittest.TestCase):
     def test_optional_empty_contract_and_old_cache_defaults(self):
         expected = {"history": {key: [] for key in b.HISTORY_FIELDS}, "historyFetchedAt": None,
                     "latestActivity": None, "activityFetchedAt": None,
+                    "activities": None, "activitiesFetchedAt": None, "activitiesError": None,
                     "activityError": None, "historyError": None}
         self.assertEqual({key: b.empty(NOW, "UTC")[key] for key in expected}, expected)
         b.run("fetch", self.config, NOW)
@@ -851,14 +971,16 @@ class BackendTests(unittest.TestCase):
             type(self).response = payload(charts=charts, tags=tags)
             result = b.run("fetch", self.config, NOW, charts)
             self.assertEqual(result["latestActivity"], {
+                "id": "123", "connectId": "123",
                 "time": b.iso(NOW - timedelta(hours=1)), "type": "running", "durationSeconds": 1800,
-                "distanceMeters": 5000, "calories": 350, "bmrCalories": 40,
+                "distanceMeters": 5000, "calories": 350, "bmrCalories": 40, "selector": "synthetic",
                 **{key: None for key in b.ACTIVITY_DETAILS}})
             self.assertIsNone(result["activityError"])
             self.assertEqual(result["activityFetchedAt"], b.iso(NOW))
             query = parse_qs(urlsplit(self.optional_requests[-2 if charts else -1][1]).query)["q"][0]
             self.assertIn('FROM "ActivitySummary"', query)
             self.assertIn(',*::tag', query)
+            self.assertIn('"Activity_ID"', query)
             self.assertIn('"activityType" != \'No Activity\'', query)
             self.assertTrue(query.endswith("ORDER BY time DESC LIMIT 1"))
             self.assertNotIn("GROUP BY", query)
@@ -870,12 +992,634 @@ class BackendTests(unittest.TestCase):
             self.assertNotIn("synthetic-account", json.dumps(result))
         self.assertEqual(len(self.optional_requests), 3)
 
+    def test_activity_id_validated_reconciled_and_old_cache(self):
+        for value in ("0", "00123", "9" * 32):
+            for shape in ("projected", "metadata", "both", "null-column"):
+                with self.subTest(value=value, shape=shape):
+                    type(self).activity_response = activity_payload(ActivityID=value)
+                    entry = self.activity_response["results"][0]["series"][0]
+                    if shape != "projected":
+                        entry["tags"] = {"ActivityID": value}
+                    if shape == "metadata":
+                        index = entry["columns"].index("ActivityID")
+                        entry["columns"].pop(index)
+                        entry["values"][0].pop(index)
+                    elif shape == "null-column":
+                        entry["values"][0][entry["columns"].index("ActivityID")] = None
+                    result = b.run("fetch", self.config, NOW)
+                    self.assertEqual(result["latestActivity"]["id"], value)
+                    self.assertEqual(b.run("cache", self.config, NOW)["latestActivity"], result["latestActivity"])
+        path, key = b.cache_location(self.config)
+        original = json.loads(path.read_text())
+        for value in (None, 123, True, {}, "", "123 ", "+123", "12/3", "9" * 33, "\u0661", "\u00b2", "12\n"):
+            with self.subTest(value=value):
+                envelope = copy.deepcopy(original)
+                envelope["data"]["latestActivity"]["id"] = value
+                path.write_text(json.dumps(envelope))
+                self.assertIsNone(b.read_cache(path, key, self.config, NOW))
+                type(self).activity_response = activity_payload(ActivityID=value)
+                result, _ = b.fetch(self.config, NOW)
+                if value is None:
+                    self.assertNotIn("id", result["latestActivity"])
+                else:
+                    self.assertIsNone(result["latestActivity"])
+                    self.assertEqual(result["activityError"], "invalid_response")
+        original["data"]["latestActivity"].pop("id")
+        path.write_text(json.dumps(original))
+        self.assertNotIn("id", b.read_cache(path, key, self.config, NOW)["data"]["latestActivity"])
+
+    def test_connect_id_requires_matching_collector_field(self):
+        type(self).response = payload(charts=True)
+        for activity_id, marker, expected in (
+                ("123", 123, "123"), ("123", "123", "123"),
+                ("9007199254740993", 9007199254740993, "9007199254740993"),
+                ("9" * 32, int("9" * 32), "9" * 32), ("00123", "00123", "00123"),
+                ("00123", 123, None), ("123", 456, None), ("123", "456", None),
+                ("123", None, None), ("123", 123.0, None), ("123", True, None),
+                ("123", -123, None), ("123", {}, None), ("123", "123 ", None),
+                ("123", "\u0661\u0662\u0663", None), ("0", 0, None), ("0", "0", None),
+                ("123", 10**32, None)):
+            with self.subTest(activity_id=activity_id, marker=marker):
+                fields = {"ActivityID": activity_id, "Activity_ID": marker}
+                type(self).activity_response = activity_payload(**fields)
+                type(self).activities_response = activities_payload(fields)
+                result = b.run("fetch", self.config, NOW, True)
+                for item in (result["latestActivity"], result["activities"]["items"][0]):
+                    self.assertEqual(item["id"], activity_id)
+                    if expected is None:
+                        self.assertNotIn("connectId", item)
+                    else:
+                        self.assertEqual(item["connectId"], expected)
+                    self.assertNotIn("Activity_ID", item)
+                self.assertIsNone(result["activityError"])
+                self.assertIsNone(result["activitiesError"])
+                cached = b.run("cache", self.config, NOW, True)
+                self.assertEqual(cached["latestActivity"], result["latestActivity"])
+                self.assertEqual(cached["activities"], result["activities"])
+
+    def test_connect_id_manual_import_without_marker_and_tag_not_field(self):
+        type(self).response = payload(charts=True)
+        synthetic_id = "9876543210987654321"
+        for metadata in (False, True):
+            type(self).activity_response = activity_payload(ActivityID=synthetic_id)
+            type(self).activities_response = activities_payload({"ActivityID": synthetic_id})
+            for response in (self.activity_response, self.activities_response):
+                entry = response["results"][0]["series"][0]
+                index = entry["columns"].index("Activity_ID")
+                entry["columns"].pop(index)
+                entry["values"][0].pop(index)
+                if metadata:
+                    # A numeric ID in series tags still does not establish provenance.
+                    entry["tags"] = {"ActivityID": synthetic_id}
+            result = b.run("fetch", self.config, NOW, True)
+            for item in (result["latestActivity"], result["activities"]["items"][0]):
+                self.assertEqual(item["id"], synthetic_id)
+                self.assertNotIn("connectId", item)
+            self.assertIsNone(result["activityError"])
+            self.assertIsNone(result["activitiesError"])
+
+    def test_connect_id_matches_reconciled_tag_not_just_column(self):
+        type(self).response = payload(charts=True)
+        for metadata_id, expected in (("123", "123"), ("456", None)):
+            type(self).activity_response = activity_payload(ActivityID=None)
+            type(self).activities_response = activities_payload({"ActivityID": None})
+            for response in (self.activity_response, self.activities_response):
+                response["results"][0]["series"][0]["tags"] = {"ActivityID": metadata_id}
+            result, _ = b.fetch(self.config, NOW, True)
+            for item in (result["latestActivity"], result["activities"]["items"][0]):
+                self.assertEqual(item["id"], metadata_id)
+                self.assertEqual(item.get("connectId"), expected)
+
+    def test_connect_id_cache_marker_validation_and_old_cache_no_promotion(self):
+        type(self).response = payload(charts=True)
+        type(self).activity_response = activity_payload()
+        type(self).activities_response = activities_payload({})
+        initial = b.run("fetch", self.config, NOW, True)
+        path, key = b.cache_location(self.config)
+        original = json.loads(path.read_text())
+        for section in ("latestActivity", "activities"):
+            for value in (None, 123, True, {}, "", "456", "123 ", "9" * 33, "\u0661"):
+                with self.subTest(section=section, value=value):
+                    envelope = copy.deepcopy(original)
+                    item = envelope["data"][section]
+                    if section == "activities":
+                        item = item["items"][0]
+                    item["connectId"] = value
+                    path.write_text(json.dumps(envelope))
+                    self.assertIsNone(b.read_cache(path, key, self.config, NOW))
+        for item in (original["data"]["latestActivity"], original["data"]["activities"]["items"][0]):
+            item.pop("connectId")
+            item["Activity_ID"] = 123  # Unknown cache fields cannot promote an old ID.
+        path.write_text(json.dumps(original))
+        cached = b.read_cache(path, key, self.config, NOW)["data"]
+        for item in (cached["latestActivity"], cached["activities"]["items"][0]):
+            self.assertEqual(item["id"], "123")
+            self.assertNotIn("connectId", item)
+            self.assertNotIn("Activity_ID", item)
+        self.assertEqual(initial["latestActivity"]["connectId"], "123")
+        self.assertEqual(initial["activities"]["items"][0]["connectId"], "123")
+
+    def test_connect_id_dedupe_does_not_borrow_or_fail_on_missing_marker(self):
+        type(self).response = payload(charts=True)
+        for rows in (({}, {"Activity_ID": None}), ({"Activity_ID": None}, {}),
+                     ({}, {"Activity_ID": 456}, {})):
+            type(self).activities_response = activities_payload(*rows)
+            result, _ = b.fetch(self.config, NOW, True)
+            self.assertIsNone(result["activitiesError"])
+            self.assertEqual(len(result["activities"]["items"]), 1)
+            self.assertNotIn("connectId", result["activities"]["items"][0])
+        type(self).activities_response = activities_payload(
+            {"time": b.iso(NOW - timedelta(hours=1))}, {"Activity_ID": None})
+        result, _ = b.fetch(self.config, NOW, True)
+        self.assertNotIn("connectId", result["activities"]["items"][0])
+        for item in (b.demo(NOW, True)["latestActivity"], *b.demo(NOW, True)["activities"]["items"]):
+            self.assertNotIn("connectId", item)
+
+    def test_activities_window_query_and_raw_contract(self):
+        tags = {**TAGS, "User_ID": "private-user", "Account": "private-account"}
+        self.config["tags"] = {"Device": "Fixture"}
+        type(self).response = payload(charts=True, tags=tags)
+        type(self).activities_response = activities_payload(
+            {"ActivityID": "00123", "time": "2026-08-29T23:00:00Z", "distance": 0},
+            {"ActivityID": "456", "time": b.iso(NOW), "calories": None}, tags=tags)
+        result = b.run("fetch", self.config, NOW, True)
+        bundle = result["activities"]
+        self.assertEqual(set(bundle), {"startDate", "endDate", "from", "to", "items"})
+        self.assertEqual(bundle["startDate"], "2026-08-30")
+        self.assertEqual(bundle["endDate"], "2026-09-05")
+        self.assertEqual(bundle["from"], int(b.timestamp("2026-08-29T23:00:00Z").timestamp() * 1000))
+        self.assertEqual(bundle["to"], int(b.timestamp("2026-09-05T23:00:00Z").timestamp() * 1000))
+        self.assertEqual([item["id"] for item in bundle["items"]], ["456", "00123"])
+        self.assertEqual(bundle["items"][0], {"id": "456", "time": b.iso(NOW), "date": "2026-09-05",
+            "type": "running", "durationSeconds": 1800, "distanceMeters": 5000, "calories": None})
+        self.assertEqual(bundle["items"][1]["date"], "2026-08-30")
+        self.assertEqual(bundle["items"][1]["distanceMeters"], 0)
+        self.assertEqual(result["activitiesFetchedAt"], b.iso(NOW))
+        self.assertIsNone(result["activitiesError"])
+        self.assertNotIn("private-", json.dumps(result))
+        self.assertEqual(len(self.activities_requests), 1)
+        query = parse_qs(urlsplit(self.activities_requests[0][1]).query)["q"][0]
+        self.assertTrue(query.startswith('SELECT "activityType","elapsedDuration","distance","calories","Activity_ID",*::tag FROM "ActivitySummary"'))
+        self.assertTrue(query.endswith("ORDER BY time DESC LIMIT 501"))
+        self.assertIn("time >= '2026-08-29T23:00:00Z'", query)
+        self.assertIn("time <= '2026-09-05T10:00:00Z'", query)
+        self.assertIn('"activityType" != \'No Activity\'', query)
+        for key, value in tags.items():
+            self.assertIn(b.quoted(key, '"') + " = " + b.quoted(value, "'"), query)
+        for forbidden in ("GROUP BY", "SLIMIT", "SUM(", "LAST(", "bmrCalories"):
+            self.assertNotIn(forbidden, query)
+
+    def test_activities_dst_window_and_boundary_validation(self):
+        for instant, start, end, hours in (
+                ("2026-03-30T12:00:00Z", "2026-03-24T00:00:00Z", "2026-03-30T23:00:00Z", 167),
+                ("2026-10-26T12:00:00Z", "2026-10-19T23:00:00Z", "2026-10-27T00:00:00Z", 169)):
+            now = b.timestamp(instant)
+            type(self).response = payload(now, True)
+            for when, valid in ((start, True), (instant, True), (end, False),
+                                (b.iso(b.timestamp(start) - timedelta(microseconds=1)), False),
+                                (b.iso(now + timedelta(microseconds=1)), False)):
+                with self.subTest(instant=instant, when=when):
+                    type(self).activities_response = activities_payload({"time": when})
+                    result, _ = b.fetch(self.config, now, True)
+                    if valid:
+                        self.assertEqual(result["activities"]["to"] - result["activities"]["from"], hours * 3600000)
+                        self.assertEqual(result["activities"]["to"], int(b.timestamp(end).timestamp() * 1000))
+                    else:
+                        self.assertIsNone(result["activities"])
+                        self.assertEqual(result["activitiesError"], "invalid_response")
+
+    def test_activities_dedupe_latest_and_equal_time_conflicts(self):
+        type(self).response = payload(charts=True)
+        rows = [{"ActivityID": "2", "time": b.iso(NOW - timedelta(hours=1)), "distance": 100},
+                {"ActivityID": "2", "distance": 200}, {"ActivityID": "1", "distance": 300}]
+        for ordered in (rows, list(reversed(rows)), rows + [rows[1]]):
+            type(self).activities_response = activities_payload(*ordered)
+            result, _ = b.fetch(self.config, NOW, True)
+            self.assertEqual([item["id"] for item in result["activities"]["items"]], ["1", "2"])
+            self.assertEqual([item["distanceMeters"] for item in result["activities"]["items"]], [300, 200])
+        # Conflicts in an older version cannot hide behind a newer row either.
+        for conflicting in ({**rows[0], "distance": 999}, {**rows[1], "calories": 999}):
+            type(self).activities_response = activities_payload(*rows, conflicting)
+            result, _ = b.fetch(self.config, NOW, True)
+            self.assertIsNone(result["activities"])
+            self.assertEqual(result["activitiesError"], "invalid_response")
+
+    def test_activities_raw_limit_before_dedupe(self):
+        type(self).response = payload(charts=True)
+        for count in (500, 501):
+            type(self).activities_response = activities_payload(*([{}] * count))
+            result, _ = b.fetch(self.config, NOW, True)
+            if count == 500:
+                self.assertEqual(len(result["activities"]["items"]), 1)
+            else:
+                self.assertIsNone(result["activities"])
+                self.assertEqual(result["activitiesError"], "truncated_response")
+
+    def test_activities_every_row_source_validated_before_dedupe(self):
+        type(self).response = payload(charts=True)
+        for foreign in ({"Device": "Other"}, {"Database_Name": "Other"}):
+            type(self).activities_response = activities_payload({}, {"time": b.iso(NOW - timedelta(days=1)), **foreign})
+            result, _ = b.fetch(self.config, NOW, True)
+            self.assertIsNone(result["activities"])
+            self.assertEqual(result["activitiesError"], "ambiguous_source")
+        type(self).activities_response = activities_payload({})
+        self.activities_response["results"][0]["series"][0]["tags"] = {"ActivityID": "456"}
+        self.assertEqual(b.fetch(self.config, NOW, True)[0]["activitiesError"], "invalid_response")
+
+    def test_activities_missing_invalid_id_and_malformed_rows_fail_bundle(self):
+        type(self).response = payload(charts=True)
+        for fields in ({"ActivityID": value} for value in (None, "", "12/3", "9" * 33, "\u0661", 123)):
+            type(self).activities_response = activities_payload(fields)
+            result, _ = b.fetch(self.config, NOW, True)
+            self.assertIsNone(result["activities"])
+            self.assertEqual(result["activitiesError"], "invalid_response")
+            self.assertEqual((result["status"], result["error"]), ("ok", None))
+        for mutation, error in (("row", "invalid_response"), ("partial", "truncated_response"),
+                                ("series", "ambiguous_source"), ("placeholder", "invalid_response")):
+            type(self).activities_response = activities_payload({})
+            entry = self.activities_response["results"][0]["series"][0]
+            if mutation == "row":
+                entry["values"][0].pop()
+            elif mutation == "partial":
+                entry["partial"] = True
+            elif mutation == "series":
+                self.activities_response["results"][0]["series"] *= 2
+            else:
+                entry["values"][0][1] = "No Activity"
+            self.assertEqual(b.fetch(self.config, NOW, True)[0]["activitiesError"], error)
+
+    def test_activities_tag_metadata_and_nullable_numbers(self):
+        type(self).response = payload(charts=True)
+        for shape in ("metadata", "both", "null-column"):
+            type(self).activities_response = activities_payload({"distance": -1, "calories": True, "elapsedDuration": "5"})
+            entry = self.activities_response["results"][0]["series"][0]
+            entry["tags"] = {**TAGS, "ActivityID": "123", "ActivitySelector": "synthetic"}
+            if shape == "metadata":
+                entry["columns"] = entry["columns"][:5]
+                entry["values"][0] = entry["values"][0][:5]
+            elif shape == "null-column":
+                entry["values"][0][5:] = [None] * (len(entry["columns"]) - 5)
+            result, _ = b.fetch(self.config, NOW, True)
+            item = result["activities"]["items"][0]
+            self.assertEqual(item["id"], "123")
+            self.assertTrue(all(item[key] is None for key in ("durationSeconds", "distanceMeters", "calories")))
+
+    def test_activities_cache_retention_empty_clear_and_runtime_strip(self):
+        type(self).response = payload(charts=True)
+        type(self).activities_response = activities_payload({})
+        initial = b.run("fetch", self.config, NOW, True)
+        later = NOW + timedelta(days=2)
+        type(self).response = payload(later, True)
+        type(self).activities_response = {"error": "private-error"}
+        failed = b.run("fetch", self.config, later, True)
+        self.assertEqual(failed["activities"], initial["activities"])
+        self.assertEqual(failed["activitiesFetchedAt"], b.iso(NOW))
+        self.assertEqual(failed["activitiesError"], "query_error")
+        self.assertEqual((failed["status"], failed["error"]), ("ok", None))
+        type(self).response = payload(later)
+        for command in ("fetch", "cache"):
+            stripped = b.run(command, self.config, later)
+            for key in ("activities", "activitiesFetchedAt", "activitiesError"):
+                self.assertIsNone(stripped[key])
+        self.assertEqual(len(self.activities_requests), 2)
+        cached = b.run("cache", self.config, later, True)
+        for key in ("activities", "activitiesFetchedAt", "activitiesError"):
+            self.assertEqual(cached[key], failed[key])
+        type(self).http_status = 401
+        self.assertEqual(b.run("fetch", self.config, later, True)["activities"], initial["activities"])
+        type(self).http_status = 200
+        type(self).response = payload(later, True)
+        type(self).activities_response = activities_payload()
+        cleared = b.run("fetch", self.config, later, True)
+        self.assertEqual(cleared["activities"]["items"], [])
+        self.assertEqual(cleared["activities"]["endDate"], "2026-09-07")
+        self.assertEqual(cleared["activitiesFetchedAt"], b.iso(later))
+        self.assertIsNone(cleared["activitiesError"])
+        self.assertEqual(b.run("cache", self.config, later, True)["activities"], cleared["activities"])
+
+    def test_activities_cache_source_isolation(self):
+        for tags in ({**TAGS, "Device": "Other"}, {**TAGS, "User_ID": "Other"}, {}, None):
+            type(self).response = payload(charts=True)
+            type(self).activities_response = activities_payload({})
+            b.run("fetch", self.config, NOW, True)
+            type(self).response = (payload(charts=True, tags=tags) if tags is not None else
+                                   {"results": [{"statement_id": n} for n in range(7)]})
+            type(self).activities_response = {"error": "private-error"}
+            result = b.run("fetch", self.config, NOW, True)
+            self.assertIsNone(result["activities"])
+            self.assertIsNone(result["activitiesFetchedAt"])
+            self.assertIsNone(b.run("cache", self.config, NOW, True)["activities"])
+
+    def test_activities_cache_reconstructs_bounds_and_rejects_malformed(self):
+        type(self).response = payload(charts=True)
+        type(self).activities_response = activities_payload({})
+        initial = b.run("fetch", self.config, NOW, True)
+        path, key = b.cache_location(self.config)
+        original = json.loads(path.read_text())
+        envelope = copy.deepcopy(original)
+        bundle = envelope["data"]["activities"]
+        bundle.update({"from": "forged", "to": 0, "private": "private"})
+        bundle["items"][0].update({"selector": "private", "account": "private"})
+        path.write_text(json.dumps(envelope))
+        clean = b.read_cache(path, key, self.config, NOW + timedelta(days=10))["data"]
+        self.assertEqual(clean["activities"], initial["activities"])
+        self.assertNotIn("private", json.dumps(clean))
+        for mutation in ("id", "date", "time", "duplicate", "oversize", "startDate", "endDate", "fetched", "error"):
+            envelope = copy.deepcopy(original)
+            bundle = envelope["data"]["activities"]
+            if mutation == "id":
+                bundle["items"][0]["id"] = "../123"
+            elif mutation == "date":
+                bundle["items"][0]["date"] = "2026-09-04"
+            elif mutation == "time":
+                bundle["items"][0]["time"] = b.iso(NOW + timedelta(seconds=1))
+            elif mutation in ("duplicate", "oversize"):
+                bundle["items"] *= 2 if mutation == "duplicate" else 501
+            elif mutation in ("startDate", "endDate"):
+                bundle[mutation] = "2026-01-01"
+            elif mutation == "fetched":
+                envelope["data"]["activitiesFetchedAt"] = None
+            else:
+                envelope["data"]["activitiesError"] = "private"
+            path.write_text(json.dumps(envelope))
+            self.assertIsNone(b.read_cache(path, key, self.config, NOW), mutation)
+
+    def test_activities_order_deadline_and_no_gps_fanout(self):
+        clock = [100]
+        calls = []
+        def respond(config, query, timeout):
+            calls.append((query, timeout))
+            if query.startswith('SELECT "BodyBatteryLevel"'):
+                return payload(charts=True)
+            if query.endswith("LIMIT 501"):
+                self.assertEqual(timeout, 1)
+                clock[0] = 110
+                return activities_payload({}, {"ActivityID": "456"})
+            if query.startswith('SELECT "activityType"'):
+                return activity_payload()
+            if query.startswith('SELECT "stressLevel"') and "LIMIT 2001" in query:
+                clock[0] = 109
+            return {"results": [{"statement_id": n} for n in range(query.count(";") + 1)]}
+        with patch.object(b, "monotonic", side_effect=lambda: clock[0]), patch.object(b, "request", side_effect=respond):
+            result, _ = b.fetch(self.config, NOW, True)
+        self.assertEqual(len(result["activities"]["items"]), 2)
+        self.assertTrue(calls[-1][0].endswith("LIMIT 501"))
+        self.assertEqual(len(calls), 13)
+        self.assertFalse(any('FROM "ActivityGPS"' in query for query, _ in calls))
+        # An expired budget skips the overview entirely rather than starting a fresh one.
+        with patch.object(b, "monotonic", side_effect=[100] + [110] * 30), patch.object(
+                b, "request", return_value=payload(charts=True)) as request:
+            result, _ = b.fetch(self.config, NOW, True)
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(result["activitiesError"], "timeout")
+
+    def test_activities_demo_and_doctor_no_requests(self):
+        with patch.object(b, "request", side_effect=AssertionError):
+            demo = b.demo(NOW, True)
+            self.assertEqual(demo["activities"]["endDate"], "2026-09-05")
+            self.assertEqual(len(demo["activities"]["items"]), 4)
+            self.assertEqual(demo["activities"]["items"][0]["id"], demo["latestActivity"]["id"])
+            self.assertEqual(demo["activities"]["items"][0]["time"], demo["latestActivity"]["time"])
+            self.assertIsNone(b.demo(NOW, False)["activities"])
+        result = b.run("doctor", self.config, NOW)
+        self.assertIsNone(result["activities"])
+        self.assertEqual(self.activities_requests, [])
+
+    def test_activities_failure_isolation_and_single_latest_gps_lookup(self):
+        for overview in (activities_payload({"ActivityID": "456"}), {"error": "private-error"},
+                         b.Failure("network_error")):
+            calls = []
+            def respond(config, query, timeout):
+                calls.append(query)
+                if query.startswith('SELECT "BodyBatteryLevel"'):
+                    return payload(charts=True)
+                if query.endswith("LIMIT 501"):
+                    if isinstance(overview, Exception):
+                        raise overview
+                    return overview
+                if query.startswith('SELECT "activityType"'):
+                    return activity_payload()
+                if 'FROM "ActivityGPS"' in query:
+                    self.assertIn('"ActivityID" = \'123\'', query)
+                    return supplemental_payload("ActivityGPS", ("position_lat",), [[b.iso(NOW), 1]],
+                        {**TAGS, "ActivityID": "123", "ActivitySelector": "gps-only"})
+                return {"results": [{"statement_id": n} for n in range(query.count(";") + 1)]}
+            with patch.object(b, "request", side_effect=respond):
+                result, _ = b.fetch(self.config, NOW, True)
+            self.assertTrue(calls[-2].endswith("LIMIT 501"))
+            self.assertIn('FROM "ActivityGPS"', calls[-1])
+            self.assertEqual(sum('FROM "ActivityGPS"' in query for query in calls), 1)
+            self.assertEqual(result["latestActivity"]["gpsSelector"], "gps-only")
+            self.assertEqual((result["status"], result["error"]), ("ok", None))
+            self.assertIsNone(result["activityError"])
+            self.assertNotIn("private-error", json.dumps(result))
+            if result["activities"] is None:
+                self.assertIn(result["activitiesError"], ("query_error", "network_error"))
+
+    def test_activity_gps_selector_differs_from_summary(self):
+        tags = {**TAGS, "User_ID": "private-user", "Account": "private-account"}
+        type(self).response = payload(tags=tags)
+        type(self).activity_response = activity_payload(tags, ActivitySelector="summary-start")
+        type(self).gps_response = supplemental_payload("ActivityGPS", ("position_lat",),
+            [[b.iso(NOW - timedelta(minutes=59)), 1]],
+            {**tags, "ActivityID": "123", "ActivitySelector": "first-fit-record"})
+        result = b.run("fetch", self.config, NOW)
+        self.assertEqual(result["latestActivity"]["selector"], "summary-start")
+        self.assertEqual(result["latestActivity"].get("gpsSelector"), "first-fit-record")
+        self.assertNotIn("ActivityID", result["latestActivity"])
+        self.assertEqual(len(self.gps_requests), 1)
+        query = parse_qs(urlsplit(self.gps_requests[0][1]).query)["q"][0]
+        for key, value in {**tags, "ActivityID": "123"}.items():
+            self.assertIn('"' + key + '" = \'' + value + "'", query)
+        self.assertNotIn("summary-start", query)
+        self.assertIn("GROUP BY * ORDER BY time ASC LIMIT 1 SLIMIT 2", query)
+        self.assertEqual(b.run("cache", self.config, NOW)["latestActivity"], result["latestActivity"])
+        self.assertNotIn("private-", json.dumps(result))
+
+    def test_activity_selector_reconciled_tags_and_cache(self):
+        for selector in ("synthetic", "  Morning run & walk / #123?x=1  ", "caf\u00e9", "x" * 256,
+                         "x" * 255 + "\U0001f41f"):
+            for shape in ("projected", "metadata", "both", "null-column"):
+                with self.subTest(selector=selector, shape=shape):
+                    type(self).activity_response = activity_payload(ActivitySelector=selector)
+                    entry = self.activity_response["results"][0]["series"][0]
+                    if shape != "projected":
+                        entry["tags"] = {**TAGS, "ActivityID": "123", "ActivitySelector": selector}
+                    if shape == "metadata":
+                        entry["columns"] = ["time", "activityType"]
+                        entry["values"] = [[b.iso(NOW - timedelta(hours=1)), "running"]]
+                    elif shape == "null-column":
+                        entry["values"][0][entry["columns"].index("ActivitySelector")] = None
+                    result = b.run("fetch", self.config, NOW)
+                    self.assertEqual(result["latestActivity"]["selector"], selector)
+                    self.assertEqual(result["latestActivity"]["time"], b.iso(NOW - timedelta(hours=1)))
+                    self.assertNotIn("ActivityID", result["latestActivity"])
+                    self.assertNotIn("ActivitySelector", result["latestActivity"])
+                    self.assertEqual(b.run("cache", self.config, NOW)["latestActivity"], result["latestActivity"])
+
+    def test_activity_gps_unavailable_does_not_drop_summary_or_retain_selector(self):
+        type(self).activity_response = activity_payload()
+        good = supplemental_payload("ActivityGPS", ("position_lat",), [[b.iso(NOW), 1]],
+                                    {**TAGS, "ActivityID": "123", "ActivitySelector": "gps-only"})
+        invalid = [{"results": [{"statement_id": 0}]}, {"error": "private-error"}, [],
+                   {"results": [{"statement_id": 0, "error": "private-error"}]}]
+        for mutation in ("source", "id", "selector", "missing-selector", "many", "partial", "row", "time"):
+            extra = copy.deepcopy(good)
+            entry = extra["results"][0]["series"][0]
+            if mutation == "source":
+                entry["tags"]["User_ID"] = "private-other"
+            elif mutation == "id":
+                entry["tags"]["ActivityID"] = "456"
+            elif mutation == "selector":
+                entry["tags"]["ActivitySelector"] = "bad\n"
+            elif mutation == "missing-selector":
+                entry["tags"].pop("ActivitySelector")
+            elif mutation == "many":
+                extra["results"][0]["series"] *= 2
+            elif mutation == "partial":
+                entry["partial"] = True
+            elif mutation == "row":
+                entry["values"] *= 2
+            else:
+                entry["values"][0][0] = b.iso(NOW + timedelta(seconds=1))
+            invalid.append(extra)
+        for extra in invalid:
+            with self.subTest(extra=extra):
+                type(self).gps_response = good
+                self.assertEqual(b.run("fetch", self.config, NOW)["latestActivity"]["gpsSelector"], "gps-only")
+                type(self).gps_response = extra
+                result = b.run("fetch", self.config, NOW)
+                self.assertEqual(result["latestActivity"]["selector"], "synthetic")
+                self.assertNotIn("gpsSelector", result["latestActivity"])
+                self.assertIsNone(result["activityError"])
+                self.assertEqual(result["activityFetchedAt"], b.iso(NOW))
+                self.assertNotIn("private-", json.dumps(result))
+                self.assertNotIn("gpsSelector", b.run("cache", self.config, NOW)["latestActivity"])
+
+    def test_activity_gps_cache_validation_and_old_cache(self):
+        type(self).activity_response = activity_payload()
+        type(self).gps_response = supplemental_payload("ActivityGPS", ("position_lat",), [[b.iso(NOW), 1]],
+            {**TAGS, "ActivityID": "123", "ActivitySelector": "gps-only"})
+        initial = b.run("fetch", self.config, NOW)
+        path, key = b.cache_location(self.config)
+        original = json.loads(path.read_text())
+        type(self).http_status = 401
+        self.assertEqual(b.run("fetch", self.config, NOW)["latestActivity"], initial["latestActivity"])
+        for value in (None, 123, True, {}, "", " ", "x" * 257, "gps\n", "gps\ud800"):
+            envelope = copy.deepcopy(original)
+            envelope["data"]["latestActivity"]["gpsSelector"] = value
+            path.write_text(json.dumps(envelope))
+            self.assertIsNone(b.read_cache(path, key, self.config, NOW))
+        original["data"]["latestActivity"].pop("gpsSelector")
+        path.write_text(json.dumps(original))
+        self.assertEqual(b.run("cache", self.config, NOW)["latestActivity"], original["data"]["latestActivity"])
+
+    def test_activity_gps_id_metadata_deadline_and_failure_isolation(self):
+        type(self).activity_response = activity_payload(ActivityID=None)
+        b.run("fetch", self.config, NOW)
+        self.assertEqual(self.gps_requests, [])
+        self.activity_response["results"][0]["series"][0]["tags"] = {"ActivityID": "123"}
+        b.run("fetch", self.config, NOW)
+        self.assertEqual(len(self.gps_requests), 1)
+        for activity_id in (None, "", " ", "x" * 257, "bad\n"):
+            with patch.object(b, "request", side_effect=AssertionError):
+                self.assertIsNone(b.gps_selector(self.config, TAGS, activity_id, NOW, NOW, 100))
+        with patch.object(b, "monotonic", return_value=100), patch.object(b, "request") as request:
+            self.assertIsNone(b.gps_selector(self.config, TAGS, "123", NOW, NOW, 100))
+            request.assert_not_called()
+        for failure in (b.Failure("timeout"), b.Failure("network_error"), b.Failure("auth_error")):
+            with patch.object(b, "monotonic", return_value=100), patch.object(b, "request", side_effect=failure) as request:
+                self.assertIsNone(b.gps_selector(self.config, TAGS, "123'\\", NOW, NOW, 102))
+                self.assertEqual(request.call_args.kwargs["timeout"], 2)
+                self.assertIn('"ActivityID" = \'123\\\'\\\\\'', request.call_args.args[1])
+
+    def test_activity_gps_does_not_cross_activities_or_sources(self):
+        type(self).activity_response = activity_payload()
+        type(self).gps_response = supplemental_payload("ActivityGPS", ("position_lat",), [[b.iso(NOW), 1]],
+            {**TAGS, "ActivityID": "123", "ActivitySelector": "gps-only"})
+        original = b.run("fetch", self.config, NOW)
+        self.assertIn("gpsSelector", original["latestActivity"])
+        # A successful new summary must never borrow the previous activity's GPS selector.
+        type(self).activity_response = activity_payload(ActivityID="456", ActivitySelector="new-summary")
+        result = b.run("fetch", self.config, NOW)
+        self.assertEqual(result["latestActivity"]["selector"], "new-summary")
+        self.assertNotIn("gpsSelector", result["latestActivity"])
+        # Nor may a matching activity ID bypass full source equality.
+        tags = {**TAGS, "User_ID": "other"}
+        type(self).response = payload(tags=tags)
+        type(self).activity_response = activity_payload(tags)
+        result = b.run("fetch", self.config, NOW)
+        self.assertIsNotNone(result["latestActivity"])
+        self.assertNotIn("gpsSelector", result["latestActivity"])
+        count = len(self.gps_requests)
+        b.run("doctor", self.config, NOW)
+        b.demo(NOW, True)
+        self.assertEqual(len(self.gps_requests), count)
+
+    def test_activity_selector_absent_and_old_v1_cache(self):
+        for projected_null in (False, True):
+            type(self).activity_response = activity_payload(ActivitySelector=None)
+            entry = self.activity_response["results"][0]["series"][0]
+            if not projected_null:
+                index = entry["columns"].index("ActivitySelector")
+                entry["columns"].pop(index)
+                entry["values"][0].pop(index)
+            result, _ = b.fetch(self.config, NOW)
+            self.assertIsNone(result["activityError"])
+            self.assertNotIn("selector", result["latestActivity"])
+        type(self).activity_response = activity_payload()
+        b.run("fetch", self.config, NOW)
+        path, key = b.cache_location(self.config)
+        envelope = json.loads(path.read_text())
+        envelope["data"]["latestActivity"].pop("selector")
+        path.write_text(json.dumps(envelope))
+        cached = b.read_cache(path, key, self.config, NOW)["data"]
+        self.assertEqual(cached["schemaVersion"], 1)
+        self.assertEqual(cached["latestActivity"], envelope["data"]["latestActivity"])
+
+    def test_activity_selector_invalid_live_and_cache(self):
+        type(self).activity_response = activity_payload()
+        b.run("fetch", self.config, NOW)
+        path, key = b.cache_location(self.config)
+        original = json.loads(path.read_text())
+        invalid = ["", "   ", "x" * 257, "x" * 256 + "\U0001f41f", 123, True, {}, [],
+                   "run\u00a0", "run\u200b", "run\u202e", "run\ud800", "run\ue000", "run\u2028"]
+        invalid.extend("run" + chr(code) for code in (*range(32), *range(127, 160)))
+        for value in invalid:
+            for metadata in (False, True):
+                with self.subTest(value=value, metadata=metadata):
+                    extra = activity_payload(ActivitySelector=value)
+                    if metadata:
+                        extra["results"][0]["series"][0] = {
+                            "name": "ActivitySummary", "tags": {**TAGS, "ActivitySelector": value},
+                            "columns": ["time", "activityType"], "values": [[b.iso(NOW), "running"]]}
+                    with patch.object(b, "request", side_effect=[payload(), extra]
+                                      + [{"results": [{"statement_id": 0}]}] * 4):
+                        result, _ = b.fetch(self.config, NOW)
+                    self.assertIsNone(result["latestActivity"])
+                    self.assertEqual(result["activityError"], "invalid_response")
+                    self.assertEqual((result["status"], result["error"]), ("ok", None))
+        for value in [None, *invalid]:
+            with self.subTest(cached=value):
+                envelope = copy.deepcopy(original)
+                envelope["data"]["latestActivity"]["selector"] = value
+                path.write_text(json.dumps(envelope))
+                self.assertIsNone(b.read_cache(path, key, self.config, NOW))
+
+    def test_activity_identifiers_conflicting_tag_representations(self):
+        for key in ("ActivityID", "ActivitySelector"):
+            type(self).activity_response = activity_payload()
+            self.activity_response["results"][0]["series"][0]["tags"] = {key: "conflicting"}
+            result, _ = b.fetch(self.config, NOW)
+            self.assertIsNone(result["latestActivity"])
+            self.assertEqual(result["activityError"], "invalid_response")
+
     def test_activity_nullable_numeric_fields_and_bounded_type(self):
         for value in (None, -1, True, "123", {}, float("inf"), float("nan")):
             with self.subTest(value=value), patch.object(b, "request", side_effect=[
                     payload(), activity_payload(elapsedDuration=value, distance=value,
                                                 calories=value, bmrCalories=value)]
-                    + [{"results": [{"statement_id": 0}]}] * 4):
+                    + [{"results": [{"statement_id": 0}]}] * 5):
                 result, _ = b.fetch(self.config, NOW)
                 self.assertEqual(result["latestActivity"]["type"], "running")
                 self.assertTrue(all(result["latestActivity"][key] is None for key in
@@ -922,8 +1666,9 @@ class BackendTests(unittest.TestCase):
         entry["columns"] = ["time", "activityType"]
         entry["values"] = [[b.iso(NOW), "walking"]]
         result, _ = b.fetch(self.config, NOW)
-        self.assertEqual(result["latestActivity"], {"time": b.iso(NOW), "type": "walking",
+        self.assertEqual(result["latestActivity"], {"id": "123", "time": b.iso(NOW), "type": "walking",
                          "durationSeconds": None, "distanceMeters": None, "calories": None, "bmrCalories": None,
+                         "selector": "synthetic",
                          **{key: None for key in b.ACTIVITY_DETAILS}})
         entry["columns"] = ["time", "calories"]
         entry["values"] = [[b.iso(NOW), 200]]
@@ -1018,7 +1763,7 @@ class BackendTests(unittest.TestCase):
                     with patch.object(b, "request", side_effect=[payload(charts=True),
                             failure if kind == "activity" else activity_payload(),
                             failure if kind == "history" else good_history]
-                            + [{"results": [{"statement_id": 0}]}] * 9):
+                            + [{"results": [{"statement_id": 0}]}] * 11):
                         result, _ = b.fetch(self.config, NOW, True)
                     self.assertEqual((result["status"], result["error"]), ("ok", None))
                     self.assertIn(result[kind + "Error"], b.OPTIONAL_ERRORS)
@@ -1054,7 +1799,7 @@ class BackendTests(unittest.TestCase):
                     with patch.object(b, "request", side_effect=[payload(charts=True),
                             extra if kind == "activity" else activity_payload(),
                             extra if kind == "history" else history_payload()]
-                            + [{"results": [{"statement_id": 0}]}] * 9):
+                            + [{"results": [{"statement_id": 0}]}] * 11):
                         result, _ = b.fetch(self.config, NOW, True)
                     self.assertEqual(result[kind + "Error"], error)
                     self.assertEqual(result["status"], "ok")
@@ -1079,7 +1824,7 @@ class BackendTests(unittest.TestCase):
                     self.assertEqual(request.call_args.kwargs["timeout"], timeout)
                 self.assertEqual(result["activityError"], "timeout")
         # Seven base statement checks, then activity consumes the remaining budget.
-        with patch.object(b, "monotonic", side_effect=[100] + [101] * 7 + [109, 110] + [110] * 9), patch.object(
+        with patch.object(b, "monotonic", side_effect=[100] + [101] * 7 + [109, 110] + [110] * 10), patch.object(
                 b, "request", side_effect=[payload(charts=True), b.Failure("timeout")]) as request:
             result, _ = b.fetch(self.config, NOW, True)
             self.assertEqual(request.call_count, 2)
@@ -1094,6 +1839,7 @@ class BackendTests(unittest.TestCase):
         later = NOW + timedelta(hours=1)
         type(self).response = payload(later, True)
         type(self).activity_response = {"error": "private"}
+        self.assertEqual(initial["latestActivity"]["selector"], "synthetic")
         type(self).history_response = {"error": "private"}
         failed = b.run("fetch", self.config, later, True)
         for field in ("latestActivity", "history", "activityFetchedAt", "historyFetchedAt"):
@@ -1445,7 +2191,7 @@ class BackendTests(unittest.TestCase):
     def test_wellness_requests_share_remaining_deadline(self):
         self.wellness_fixture()
         # Core, activity, then one wellness request; all later work is expired.
-        with patch.object(b, "monotonic", side_effect=[100] + [101] * 4 + [102, 109] + [110] * 3), patch.object(
+        with patch.object(b, "monotonic", side_effect=[100] + [101] * 4 + [102, 109] + [110] * 4), patch.object(
                 b, "request", side_effect=[payload(), activity_payload(),
                     supplemental_payload("SleepSummary", ("sleepTimeSeconds",), [[b.iso(NOW), 28800]])]) as request:
             result, _ = b.fetch(self.config, NOW)
@@ -1678,7 +2424,7 @@ class BackendTests(unittest.TestCase):
             type(self).activity_response = activity_payload(**{key: value for key in b.ACTIVITY_DETAILS})
             result = b.run("fetch", self.config, NOW)
             activity = result["latestActivity"]
-            self.assertEqual(set(activity), {"time", *b.ACTIVITY_FIELDS})
+            self.assertEqual(set(activity), {"id", "connectId", "time", "selector", *b.ACTIVITY_FIELDS})
             for key in b.ACTIVITY_DETAILS:
                 valid = value == 1.5 or (value == 0 and key not in
                                          ("averageHR", "maxHR", "averageSpeed", "maxSpeed"))

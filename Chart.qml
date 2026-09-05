@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Ui as Ui
 
 Rectangle {
   id: root
@@ -14,6 +15,7 @@ Rectangle {
   property color ink: Color.accent
   property color gridColor: Util.alpha(Color.popups.text, 0.14)
   signal activated()
+  readonly property string selectedDate: points[cursor] ? points[cursor].date || "" : ""
   readonly property real startTime: endTime - 86400000
   readonly property var points: {
     var result = []
@@ -34,6 +36,8 @@ Rectangle {
   }
   implicitHeight: heading.implicitHeight + inspection.implicitHeight + Style.space(intraday ? 174 : 134)
   color: "transparent"
+  Ui.CursorSurface { anchors.fill: parent; hasCursor: root.selected }
+  HoverHandler { onHoveredChanged: if (hovered) root.activated() }
   Accessible.role: Accessible.Chart
   Accessible.name: title + ". " + readout
   Accessible.focusable: true
@@ -105,6 +109,7 @@ Rectangle {
     MouseArea {
       anchors.fill: parent; hoverEnabled: true
       onPositionChanged: function(mouse) {
+        root.activated()
         var closest = -1, distance = Infinity
         for (var i = 0; i < root.points.length; ++i) {
           var d = Math.abs(root.pointX(i) - mouse.x)

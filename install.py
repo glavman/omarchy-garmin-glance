@@ -14,12 +14,12 @@ def copy_package(source, staging):
     """Copy only reviewed package files, never local data or linked inputs."""
     files = [
         "manifest.json", "Service.qml", "BarWidget.qml", "Panel.qml",
-        "Chart.qml", "MetricCard.qml", "WatchFace.qml", "WatchIcon.qml", "ActivityIcon.qml", "StressChart.qml", "Model.js", "backend.py",
+        "Chart.qml", "MetricCard.qml", "WatchFace.qml", "WatchIcon.qml", "ActivityIcon.qml", "StressChart.qml", "Model.js", "Grafana.js", "backend.py",
         "README.md", "LICENSE", "install.py",
     ]
     if source.is_symlink() or (source / "docs").is_symlink():
         raise ValueError("Refusing to copy a symlinked package directory.")
-    for name in ("docs/SETUP.md", "docs/PUBLISHING.md"):
+    for name in ("docs/SETUP.md", "docs/PUBLISHING.md", "docs/REFERENCE.md"):
         path = source / name
         if path.is_symlink():
             raise ValueError(f"Refusing to copy a symlinked package file: {name}")

@@ -14,7 +14,7 @@ SPEC.loader.exec_module(installer)
 
 ROOT_FILES = (
     "manifest.json", "Service.qml", "BarWidget.qml", "Panel.qml",
-    "Chart.qml", "MetricCard.qml", "WatchFace.qml", "WatchIcon.qml", "ActivityIcon.qml", "StressChart.qml", "Model.js", "backend.py",
+    "Chart.qml", "MetricCard.qml", "WatchFace.qml", "WatchIcon.qml", "ActivityIcon.qml", "StressChart.qml", "Model.js", "Grafana.js", "backend.py",
     "README.md", "LICENSE", "install.py",
 )
 PLUGIN_ID = "io.github.glavman.garmin-glance"
@@ -40,7 +40,7 @@ class InstallTests(unittest.TestCase):
             "tests/test_backend.py", "unknown.qml", "docs/private.md",
             "docs/nested/SETUP.md",
         )
-        docs = ("docs/SETUP.md", "docs/PUBLISHING.md")
+        docs = ("docs/SETUP.md", "docs/PUBLISHING.md", "docs/REFERENCE.md")
         for name in extras + docs:
             path = self.source / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,7 +68,7 @@ class InstallTests(unittest.TestCase):
     def test_symlinked_allowed_files_are_rejected(self):
         secret = self.root / "secret"
         secret.write_text("not package content")
-        for name in ROOT_FILES + ("docs/SETUP.md", "docs/PUBLISHING.md"):
+        for name in ROOT_FILES + ("docs/SETUP.md", "docs/PUBLISHING.md", "docs/REFERENCE.md"):
             for target in (secret, self.root / "missing"):
                 with self.subTest(name=name, target=target.name):
                     path = self.source / name

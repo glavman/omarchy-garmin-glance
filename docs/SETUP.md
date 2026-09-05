@@ -69,7 +69,8 @@ https://github.com/glavman/omarchy-garmin-glance/blob/main/README.md
    Use source tags only if needed; do not treat tags as access controls.
    Review the plugin source, install from:
    https://github.com/glavman/omarchy-garmin-glance.git
-   Then run its doctor diagnostic and enable io.github.glavman.garmin-glance.
+   Add without enabling; decline immediate enable if prompted. Verify auth and
+   grants, run doctor, then enable io.github.glavman.garmin-glance.
    Preserve unrelated Omarchy settings; never edit /usr/share/omarchy/.
 
 6. Verify anonymous database queries are denied and the plugin account is
@@ -123,7 +124,9 @@ The plugin expects the upstream schema, verified against commit
 
 Device support and upstream fetch settings determine which values exist. HRV
 or sleep data may legitimately be unavailable. No need to import years of data:
-the plugin uses seven calendar dates for history and 24 hours for Body Battery.
+stats history uses seven completed source-local days; the
+[activities overview](REFERENCE.md#activities-overview) uses today plus six prior
+days. The Body Battery/stress overlay covers the current source-local day.
 Set the collector's `USER_TIMEZONE` and the plugin's timezone intentionally.
 
 **Security cautions:** base64 is not encryption; don't paste credentials into
@@ -569,12 +572,16 @@ such as `auth_error` or `network_error` must be resolved before expecting data.
 omarchy plugin enable io.github.glavman.garmin-glance
 ```
 
-Click the `BB` bar item. Configure the bar metric and optional Grafana dashboard
-URL through Omarchy bar settings. If the widget doesn't appear, check
+Click the watch-only bar icon; no numeric metric is shown in the bar. Configure
+the optional watch model and Grafana dashboard URL through Omarchy bar settings.
+Press `W` for the [activities overview](REFERENCE.md#activities-overview), or `A`
+to open the latest activity in Garmin Connect in your browser (no plugin Garmin
+authentication). If the widget doesn't appear, check
 `omarchy plugin list`, then restart the shell if needed.
 
-Developers using a separate checkout may run `python3 install.py` from that
-checkout instead. This creates a copied installation, not a Git-managed one.
+Developers using a separate checkout may run `python3 backend.py doctor`, then
+`python3 install.py` after connection and permission checks pass. The installer
+enables the widget and creates a copied installation, not a Git-managed one.
 Use the same installation method for later updates: `omarchy plugin update` for
 Git-managed installs, or update the checkout and rerun `python3 install.py` for
 copied installs. Run `omarchy restart shell` afterward.
@@ -604,4 +611,4 @@ For a no-backend visual check, enable `demoMode` in bar settings. It uses only
 synthetic values, never contacts InfluxDB, and does not overwrite live caches.
 After changing connection source or timezone, restart the shell to clear its
 in-memory data. Details on controls, freshness, updates and removal are in the
-[README](../README.md).
+[reference](REFERENCE.md); the [README](../README.md) is the quick start.

@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Ui as Ui
 
 Item {
   id: root
@@ -24,7 +25,7 @@ Item {
   readonly property bool hasValues: batteryPoints.some(function(p) { return p.value !== null })
     || stressPoints.some(function(p) { return p.value !== null })
   readonly property string readout: {
-    if (!inspecting) return hasValues ? "Hover to inspect / B selects chart" : "No samples available"
+    if (!inspecting) return hasValues ? "B: select / Left, Right or H, L: inspect" : "No samples available"
     var battery = nearest(batteryPoints), stress = nearest(stressPoints)
     return Qt.formatDateTime(new Date(cursorTime), "HH:mm") + " local / Battery "
       + (battery && battery.value !== null ? battery.value : "--") + " / Stress "
@@ -34,11 +35,12 @@ Item {
 
   implicitHeight: Math.max(Style.space(155), inspection.y + inspection.height + Style.space(65) + endpoints.implicitHeight)
   clip: true
-  activeFocusOnTab: true
+  Ui.CursorSurface { anchors.fill: parent; hasCursor: root.selected }
+  HoverHandler { onHoveredChanged: if (hovered) root.activated() }
   Accessible.role: Accessible.Chart
   Accessible.name: "BODY BATTERY / STRESS. Both scales 0 to 100. " + (cached ? "Cached. " : "") + readout
   Accessible.focusable: true
-  Accessible.focused: activeFocus || selected
+  Accessible.focused: selected
 
   function points(samples) {
     var result = []
@@ -81,10 +83,7 @@ Item {
   onForegroundChanged: plot.requestPaint()
   onStressInkChanged: plot.requestPaint()
   onGridColorChanged: plot.requestPaint()
-  onSelectedChanged: if (!selected && !activeFocus && !hover.containsMouse) cursorTime = NaN
-  onActiveFocusChanged: if (!activeFocus && !selected && !hover.containsMouse) cursorTime = NaN
-  Keys.onLeftPressed: moveCursor(-1)
-  Keys.onRightPressed: moveCursor(1)
+  onSelectedChanged: if (!selected && !hover.containsMouse) cursorTime = NaN
 
   Text {
     id: heading
@@ -174,9 +173,9 @@ Item {
           root.cursorTime = root.startTime + Math.max(0, Math.min(1, x / width)) * (root.endTime - root.startTime)
       }
       onEntered: inspect(mouseX)
-      onPositionChanged: function(mouse) { inspect(mouse.x) }
-      onClicked: function(mouse) { inspect(mouse.x); root.forceActiveFocus(); root.activated() }
-      onExited: if (!root.selected && !root.activeFocus) root.cursorTime = NaN
+      onPositionChanged: function(mouse) { inspect(mouse.x); root.activated() }
+      onClicked: function(mouse) { inspect(mouse.x); root.activated() }
+      onExited: if (!root.selected) root.cursorTime = NaN
     }
   }
   Text {

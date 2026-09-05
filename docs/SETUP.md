@@ -10,6 +10,10 @@ collector into InfluxDB, and finally to this plugin. Grafana and this plugin
 are two independent viewers of the same stored data. No Grafana API token is
 needed, and refreshing this plugin never requests a Garmin sync.
 
+Optional [Ask Coach](#6-optional-ask-coach) is a separate, explicitly approved
+handoff to your existing agent, which may send health data to its cloud provider.
+It does not replace the collector's Garmin authentication or the setup below.
+
 Supported starting point: Omarchy 4 with Quickshell, system Python 3.9+ and
 timezone data, and InfluxDB **1.x using InfluxQL**. Version 1.11 was tested.
 InfluxDB 2.x/3.x and Grafana-proxy transport are not supported in this release.
@@ -128,6 +132,9 @@ stats history uses seven completed source-local days; the
 [activities overview](REFERENCE.md#activities-overview) uses today plus six prior
 days. The Body Battery/stress overlay covers the current source-local day.
 Set the collector's `USER_TIMEZONE` and the plugin's timezone intentionally.
+
+Optional Coach can read 7/30/90-day windows of supported metrics and activities;
+it does not backfill missing dates or require a complete 90-day archive.
 
 **Security cautions:** base64 is not encryption; don't paste credentials into
 online encoders. Avoid world-readable token directories, default Grafana admin
@@ -540,10 +547,14 @@ an email. Inspect your own schema rather than guessing tag values. Mixed
 sources are rejected instead of averaged together. Leave tags empty for a
 single-source database. All metrics must identify the same source.
 
-Source filters are sent in GET query URLs. If a tag contains a personal display
+Dashboard source filters are sent in GET query URLs. If a tag contains a personal display
 name, InfluxDB or reverse-proxy access logs may retain it. Restrict log access
 and retention, and redact query strings where appropriate. Passwords are sent
 in the Authorization header, not the URL.
+
+Coach's bounded read-only queries instead use POST bodies, including source
+filters. Do not log those bodies or Authorization headers either. POST is not
+encryption; the same loopback/trusted-HTTPS requirements apply.
 
 ## 4. Install and Enable
 
@@ -612,3 +623,39 @@ synthetic values, never contacts InfluxDB, and does not overwrite live caches.
 After changing connection source or timezone, restart the shell to clear its
 in-memory data. Details on controls, freshness, updates and removal are in the
 [reference](REFERENCE.md); the [README](../README.md) is the quick start.
+
+## 6. Optional Ask Coach
+
+Complete and verify the connection setup above first. Coach requires the explicit
+private `~/.config/omarchy-garmin-glance/connection.json` and shares the dashboard's
+read-only account, source filters and timezone. It has no setup wizard or implicit
+connection fallback. Never paste this file, credentials or raw source tags into
+an agent conversation.
+
+Your **existing Omarchy default OpenCode, Claude, Codex or Grok must already be
+installed and authenticated**. Discovery checks `omarchy default agent` and local
+executables; launching delegates to `omarchy agent prompt`. Neither check verifies
+provider authentication. Coach does not install an agent, edit its configuration,
+change the global default, or add an SDK, API key or MCP server.
+
+1. Open **Ask Coach** in the dashboard; it is disabled in demo mode.
+2. Choose **Plan my day**, **Review my week** or **Ask a question**, and a **7, 30 or 90 day** window (default 7).
+3. Review the detected agent, personal step goal and cloud/permissions disclosure. There are no metric checkboxes: approval shares all eight supported wellbeing summaries and sanitized activities available in the chosen window.
+4. Explicitly choose **Open agent** to share. Canceling does not launch a conversation. Continue in the agent terminal, including typing your question there; there are no inline answers or guaranteed conversation resumption.
+
+The agent may send approved health data to its provider and retain chat history.
+It remains **unsandboxed**, with its existing filesystem/tool permissions;
+Omarchy's launcher may reduce approval prompts. Helper scope checks and coaching
+instructions are not OS-level isolation. Do not provide connection/session
+metadata or grant extra permissions merely to troubleshoot coaching.
+
+A launch request is not proof of authentication, snapshot loading or a completed
+answer. The source's launch checks are synthetic, not live inference verification.
+Installed Grok 1.0.13 CLI help was checked for `[PROMPT]` and
+`--permission-mode bypassPermissions`; that establishes syntax only, not provider
+login or end-to-end coaching. Fix setup separately, and return for fresh consent
+after expiry, a source change or a need for broader access.
+
+See [Ask Coach in the reference](REFERENCE.md#ask-coach) for the exact data shared,
+24-hour fixed-window sessions, query limits, error semantics and local cleanup.
+Clearing plugin coaching files cannot delete agent/provider conversations.

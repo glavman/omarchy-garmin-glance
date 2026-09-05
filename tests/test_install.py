@@ -14,8 +14,9 @@ SPEC.loader.exec_module(installer)
 
 ROOT_FILES = (
     "manifest.json", "Service.qml", "BarWidget.qml", "Panel.qml",
-    "Chart.qml", "MetricCard.qml", "WatchFace.qml", "WatchIcon.qml", "ActivityIcon.qml", "StressChart.qml", "Model.js", "Grafana.js", "backend.py",
-    "README.md", "LICENSE", "install.py",
+    "Chart.qml", "MetricCard.qml", "Coach.qml", "WatchFace.qml", "WatchIcon.qml",
+    "ActivityIcon.qml", "StressChart.qml", "Model.js", "Grafana.js", "backend.py",
+    "coach.py", "coach_data.py", "COACH.md", "README.md", "LICENSE", "install.py",
 )
 PLUGIN_ID = "io.github.glavman.garmin-glance"
 
@@ -38,7 +39,11 @@ class InstallTests(unittest.TestCase):
             "garminconnect-tokens/oauth.json", "exports/health.csv",
             "screenshots/dashboard.png", ".git/config", "__pycache__/backend.pyc",
             "tests/test_backend.py", "unknown.qml", "docs/private.md",
-            "docs/nested/SETUP.md",
+            "docs/nested/SETUP.md", "coach/session-abcdefgh/session.json",
+            "coach/session-abcdefgh/snapshot.json", "coach/.lock",
+            ".cache/omarchy-garmin-glance/coach/session-abcdefgh/snapshot.json",
+            "tests/test_coach.py", "tests/test_coach_data.py", "tests/tst_coach.qml",
+            "tests/tst_grafana.qml", "tests/tst_watch.qml", "tests/tst_navigation.qml",
         )
         docs = ("docs/SETUP.md", "docs/PUBLISHING.md", "docs/REFERENCE.md", "CONTRIBUTING.md")
         for name in extras + docs:
@@ -99,14 +104,20 @@ class InstallTests(unittest.TestCase):
             installer.copy_package(linked, self.staging)
 
     def test_missing_or_directory_runtime_file_is_rejected(self):
-        path = self.source / "Service.qml"
-        path.unlink()
-        with self.assertRaisesRegex(ValueError, "Service.qml"):
-            installer.copy_package(self.source, self.staging)
-        path.mkdir()
-        with self.assertRaisesRegex(ValueError, "Service.qml"):
-            installer.copy_package(self.source, self.staging)
-        self.assertFalse(self.staging.exists())
+        for name in ROOT_FILES:
+            with self.subTest(name=name):
+                path = self.source / name
+                original = path.read_bytes()
+                path.unlink()
+                with self.assertRaisesRegex(ValueError, name):
+                    installer.copy_package(self.source, self.staging)
+                self.assertFalse(self.staging.exists())
+                path.mkdir()
+                with self.assertRaisesRegex(ValueError, name):
+                    installer.copy_package(self.source, self.staging)
+                self.assertFalse(self.staging.exists())
+                path.rmdir()
+                path.write_bytes(original)
 
     def test_install_from_destination_refuses_before_commands_or_rename(self):
         destination = self.root / ".config/omarchy/plugins" / PLUGIN_ID

@@ -104,6 +104,8 @@ the previous in-memory display immediately. Persistent caches are source-scoped.
   duration are available; this separate Grafana action is keyboard-reachable
   in the footer. **Activity in Grafana** opens the full dashboard over the latest
   activity's time range, not the single Recent Activity table.
+- **Ask Coach**: review sharing consent and open your existing agent's terminal;
+  see [scope and privacy](#ask-coach).
 
 Settings are available through Omarchy bar settings:
 
@@ -114,10 +116,11 @@ omarchy bar set io.github.glavman.garmin-glance demoMode true --json
 omarchy bar set io.github.glavman.garmin-glance demoMode false --json
 ```
 
-The exposed settings are `watchModel`, `refreshMinutes`, `demoMode` and
-`grafanaUrl`. Polling is clamped to 1-60 minutes, defaults to 5, and backs off
-after errors. `grafanaUrl` defaults to `http://127.0.0.1:3000`; it can include a
-specific dashboard path.
+The exposed settings are `watchModel`, `refreshMinutes`, `demoMode`, `stepGoal` and
+`grafanaUrl`. `stepGoal` is a personal goal, not a Garmin reading, and is included
+in Coach consent and the approved snapshot. Polling is clamped to 1-60 minutes,
+defaults to 5, and backs off after errors. `grafanaUrl` defaults to
+`http://127.0.0.1:3000`; it can include a specific dashboard path.
 
 ### Garmin Connect Links
 
@@ -245,6 +248,7 @@ collection by the upstream collector. This plugin does not enable it or change
 the user's collector configuration. Missing readiness means unavailable or not
 collected; it does **not** establish that the watch is unsupported.
 Readiness is not displayed in the dashboard or history selector.
+It is available to Coach when recorded, without enabling collection automatically.
 
 Missing days remain gaps and are excluded from averages, not counted as zero.
 Partial averages are marked `*` with an incomplete-history note; with no valid
@@ -429,6 +433,151 @@ do not change distance visibility or pace/speed formatting: for example,
 and `snowboarding` retains skiing speed. An icon-only alias that previously had
 no metric family still has no sport-specific distance or performance display.
 
+## Ask Coach
+
+Coach is an optional, on-demand terminal handoff, not an inline chat or automatic
+coaching on dashboard refresh. It requires the existing private connection and an
+installed, authenticated Omarchy default **OpenCode, Claude, Codex or Grok**. It
+adds no agent configuration, global default change, SDK, API key or MCP server.
+Follow [optional setup](SETUP.md#6-optional-ask-coach) before using it.
+
+Choose **Plan my day**, **Review my week** or **Ask a question**, then **7, 30 or
+90 days** (default 7). Review the agent and disclosure, and explicitly approve
+**Open agent**. There are **no metric checkboxes**: consent covers all available
+supported summaries and sanitized recorded activities within that window, plus
+the configured personal step goal. Questions and answers belong in the agent
+terminal; conversation resumption is not guaranteed. Coach is disabled in demo
+mode. A successful launch request does not prove agent readiness, provider login,
+snapshot loading or answer completion.
+
+The default response instructions request **60-90 words, under 120 words**, a
+**2-3 sentence summary** and **at most two short recommendations**, with more detail
+only when requested. This is a response instruction, not an enforced output cap.
+Coaching offers cautious wellbeing observations and small optional habits, not
+medical diagnosis or training/exercise-intensity prescriptions.
+
+### Shared Data
+
+The initial snapshot includes latest valid summaries for **eight metrics**:
+Body Battery, steps, sleep score, overnight HRV, sleep duration, resting heart
+rate, training readiness and stress, plus sanitized activity details within the
+approved window. Missing metrics remain unavailable. "All available" means this
+supported schema, not arbitrary measurements, unknown fields or other databases.
+Daily history is fetched on demand, not included as a raw intraday export.
+
+Activity details include time/date, type, elapsed/moving duration, distance,
+reported calories/BMR calories, average/max heart rate and speed, elevation
+gain/loss, aerobic/anaerobic training effects and training load when available.
+**GPS, activity/account IDs, selectors, free-text notes and raw source tags are
+excluded.** Invalid numbers become null; invalid type labels are omitted with a
+warning. Labels and helper output are untrusted data, never instructions.
+
+Body Battery summary uses the latest valid intraday reading; daily history uses
+the reported daily highest value (`DailyStats.bodyBatteryHighestValue`), not a
+recomputed maximum. Stress history uses daily means of valid 0-100 readings;
+its sample timestamp is null because no single observation represents the mean.
+Other daily values are latest valid per source-local date, not sums. Sleep time
+does not subtract awake time. History includes the launch day's incomplete date,
+unlike dashboard history's seven completed days; completed-day means exclude
+that date and missing values. Missing data is not zero. Coverage describes
+observed availability, not database retention or proof of complete watch sync.
+
+### Sessions And Helper
+
+The approved source and date window are **fixed at launch**, from source-local
+midnight on the first date through the launch instant. Access lasts **24 hours**,
+not a rolling date permission. Source/config changes can invalidate access.
+Additional in-scope reads need no new consent prompt; broader access, changed
+source or expiry requires returning to Ask Coach for explicit approval.
+
+The handoff supplies a session ID and these local commands. Replace `<plugin>`
+with the plugin directory and `<session-id>` with that supplied ID, not a path:
+
+```text
+python3 <plugin>/coach.py capabilities --session <session-id>
+python3 <plugin>/coach.py summary --session <session-id>
+python3 <plugin>/coach.py history --session <session-id>
+python3 <plugin>/coach.py history --session <session-id> --days 7 --metrics steps,sleep,hrv
+python3 <plugin>/coach.py activities --session <session-id> --days 7
+```
+
+`capabilities` describes approved scope and expiry, not proven data coverage.
+`summary` includes latest wellbeing readings and activities; `history` returns
+daily samples without activities; `activities` returns no wellbeing metrics.
+Omitting options uses the full approved scope. `--days` can narrow to 1 through
+the approved number of days. `--metrics` can narrow summary/history to a nonempty,
+unique subset of `bodyBattery,steps,sleep,hrv,sleepDuration,restingHeartRate,trainingReadiness,stress`;
+`activities` rejects `--metrics`. No flag expands consent, and there is no arbitrary
+query interface or standalone unlimited export command.
+
+Successful data/capabilities, snapshots and stored sessions use **schema v2**.
+`check`, `launch`, `clear` and error envelopes remain **v1**. Old v1 sessions return
+`session_expired` and require new approval; their narrower consent is never
+retroactively expanded. The UI launch request is exactly
+`{intent, days, stepGoal, agent}` on standard input, with no metric selection.
+Intents are `day`, `week` or `question`; the helper accepts integer days 1-90
+(the UI offers 7/30/90) and a positive numeric step goal up to 100000. The detected
+agent must still match at launch. Treat helper data output as private health data.
+
+### Limits And Failures
+
+Each v2 read has a **20-second total budget**, including parsing and aggregation,
+with at most **2 seconds per job** and **9 read-only query POST requests**. History
+uses at most **90 daily selectors per metric request**, not the old v1 raw-history
+path. Each response, combined output and saved snapshot is bounded to **1 MiB**.
+These limits do not cover agent inference time or guarantee a successful 90-day
+read; try a shorter window or fewer metrics in helper history requests.
+
+Activities are limited to **500 raw rows before deduplication**. A 501st row fails
+with `truncated_response`, never silent truncation. Duplicate validated private
+ActivityIDs retain the latest timestamp; conflicting rows for the same ID/time
+fail. IDs are stripped before sharing, and items are newest first. All returned
+sections must share the same validated, nonempty source identity.
+
+Independent `query_error`, `timeout`, `network_error`, `auth_error` or `http_error`
+section failures preserve usable sections with partial/unavailable statuses and
+stable-code warnings. Exhausting the total budget fails the whole call. Malformed
+responses, missing/ambiguous source identity, redirects, truncation and size
+overflow also fail the call rather than presenting incomplete data as complete.
+Activity coverage `complete` only means its bounded query was not degraded, not
+that all activities synced or that an empty result proves no exercise.
+
+Launch needs an identified usable summary value **or** activity; activity-only
+snapshots can launch. A successful empty read yields `no_data`. If all sections
+fail, launch returns a query/transport error instead, or `data_unavailable` for
+other warnings with no usable data, **not `no_data`**. In-session reads retain
+section error statuses/warnings; do not interpret all-error results as empty
+coverage or zero. Read limitations before drawing conclusions.
+
+### Privacy And Cleanup
+
+**The agent may send approved health data to its cloud provider and retain chat
+history.** Plugin transport queries InfluxDB, not an AI provider directly, but
+coaching is not a local-only promise. Omarchy's launcher may reduce approval
+prompts; the agent retains its existing **unsandboxed filesystem/tool access**.
+Read-only grants, helper scope checks and `COACH.md` instructions are not OS-level
+isolation. Connection secrets and raw source tags are excluded from the handoff;
+do not give the agent connection files or session metadata. Keep private output
+out of logs, Git, support conversations and screenshots.
+
+Owner-only, unencrypted session metadata and snapshots live under
+`${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-garmin-glance/coach/`. At most **20 sessions**
+are stored. Expired sessions are cleaned on the next launch; there is **no automatic
+deletion timer**, so expiry can leave files on disk. Inside Ask Coach, choose
+**Clear coaching files** and confirm, or run:
+
+```bash
+python3 "$HOME/.config/omarchy/plugins/io.github.glavman.garmin-glance/coach.py" clear
+```
+
+Clear needs neither a working agent nor a working connection. It removes only
+plugin-owned session directories and snapshots, invalidating their helper access.
+It leaves `.lock`, the parent folder, dashboard caches, connection settings and
+unrelated files intact. It does not stop the agent or erase data already read.
+**Neither expiry nor clear deletes agent/provider chat history or shared copies.**
+Manage those separately using the agent/provider's retention controls. Plugin
+removal also leaves these private files intact.
+
 ## Diagnostics And Tests
 
 Diagnostics from any directory:
@@ -444,6 +593,7 @@ installer does not bundle tests). Here you can also run `python3 backend.py doct
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests
+python3 tests/run_qml.py
 omarchy plugin validate .
 ```
 
@@ -469,12 +619,26 @@ the backend, read Garmin credentials or launch a browser. Each case prints
 skip or load failure (`timeout` returns 124 if the process hangs). It is not a
 live browser-launch integration test.
 
+The additional `tests/run_qml.py` runner covers dashboard and Coach QML suites
+with packaged Omarchy imports and Quickshell initialization. It requires a
+**running host Wayland desktop**, Quickshell and QtTest; use `--host-shell PATH`
+if the shell is not at `/usr/share/omarchy/shell`. Missing host requirements or
+skipped cases are failures, not passes. It uses temporary HOME/XDG directories,
+copies only QML/JS sources and runs synthetic processes, not the real backend or
+configured agent. This is test isolation, not a sandbox for untrusted QML.
+For model-only testing without the host UI:
+
+```bash
+QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/tst_model.qml
+```
+
 `doctor` performs read-only schema queries and emits status without measurement
 values or credentials. The shell `status` command reports the active UI mode,
 request status and whether charts are loaded, without health values.
 `fetch --charts` and `cache --charts` emit **private health
 data**; don't paste their output into issues. `fetch --charts --demo` emits only
-fabricated values. The JSON contract is version 1.
+fabricated values. The dashboard JSON contract is version 1; Coach's separate
+data/session v2 and control/error v1 contracts are described [above](#sessions-and-helper).
 
 Python tests cover field mappings and units, seven completed source-local days
 and DST boundaries, latest-per-field history, daily versus instantaneous stress,
@@ -490,6 +654,15 @@ verify zero preservation for moving duration, elevation, training effects and
 load, and unavailable zero heart rates and speeds. These are automated model,
 backend and component checks, not a full live dashboard interaction test.
 
+Retain the 31-sport icon/alias and fallback cases, same-row activity details,
+Garmin/Grafana authentication boundaries and native navigation coverage when
+adding Coach tests. Coach's Python/QML suites cover scoped consent, v1-session
+rejection, v2 queries/limits, activity deduplication, empty versus failed reads,
+cleanup, launch lifecycle and synthetic process handoffs. Synthetic launch tests
+and CLI-help checks do not establish live inference, provider authentication,
+snapshot loading or completed coaching answers; report those separately from
+any explicitly authorized live verification.
+
 Use Qt 6 tooling, not the Qt 5 binaries that may be first on PATH. Standalone
 `qmllint` needs a `qs` import mapping to the installed shell; dynamic host and
 theme properties can produce metadata warnings. Runtime errors can be inspected
@@ -497,15 +670,19 @@ with `quickshell log -n -p /usr/share/omarchy/shell --tail 100 --no-color`.
 
 ## Privacy And Removal
 
-The plugin is read-only by implementation and database grant. QML plugins still
+Database access is read-only by implementation and database grant. QML plugins still
 run unsandboxed as your user; this is not isolation from other local programs.
-Secrets are read only by the helper. No telemetry or third-party chart assets.
+Connection secrets are read by Python helpers, not QML or the coaching handoff;
+this does not restrict an unsandboxed agent's filesystem access.
+No plugin telemetry or third-party chart assets.
 The plugin needs no sudo, Docker socket access or Grafana API token.
 Connection files and cached health values are private local files, not encrypted
 storage. Source tags can contain names and appear in database/proxy query logs;
 see [setup privacy notes](SETUP.md#3-configure-the-plugin-connection).
 READ grants cover the whole database: source filters are not per-person access
 control. The separately maintained collector still contacts Garmin's cloud.
+Optional Coach may disclose health data through your agent to its provider;
+[local cleanup](#privacy-and-cleanup) cannot erase those conversations.
 
 Private cache: `${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-garmin-glance/`.
 
@@ -520,7 +697,10 @@ InfluxDB data. Do not use `docker compose down -v`.
 ## Scope
 
 InfluxDB 2/3, Grafana query-proxy transport, embedded maps, full activity archives,
-notifications and medical interpretation are outside 1.0. The underlying
+notifications, medical interpretation and training prescriptions are outside the
+plugin's scope. Coach exposes only eight supported wellbeing metrics and sanitized
+activity fields, not arbitrary database contents or GPS. It adds no inline answers,
+guaranteed chat resumption or setup wizard. The underlying
 garmin-grafana collector remains responsible for Garmin login, watch
 synchronization and backfill.
 

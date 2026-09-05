@@ -13,10 +13,11 @@
     "category": "Health",
     "allowMultiple": false,
     "defaultSection": "right",
-    "defaults": {"watchModel": "", "refreshMinutes": 5, "demoMode": false, "grafanaUrl": "http://127.0.0.1:3000"},
+    "defaults": {"watchModel": "", "refreshMinutes": 5, "stepGoal": 10000, "demoMode": false, "grafanaUrl": "http://127.0.0.1:3000"},
     "schema": [
       {"key": "watchModel", "type": "string", "label": "Watch model (blank = reported device)"},
       {"key": "refreshMinutes", "type": "integer", "label": "Refresh interval (minutes)", "min": 1, "max": 60},
+      {"key": "stepGoal", "type": "integer", "label": "Personal step goal", "min": 1, "max": 100000},
       {"key": "demoMode", "type": "boolean", "label": "Synthetic demo data"},
       {"key": "grafanaUrl", "type": "string", "label": "Grafana dashboard URL"}
     ]

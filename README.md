@@ -80,6 +80,19 @@ selector and duration. Missing values stay unknown; partial totals and cached
 results are marked. Stats average seven completed days, unlike the activities
 overview, which includes today. See [controls and data semantics](docs/REFERENCE.md).
 
+## Coach
+
+**Ask Coach** optionally opens your existing Omarchy default OpenCode, Claude,
+Codex or Grok in a terminal. Choose **7, 30 or 90 days**, review the disclosure,
+then explicitly approve **Open agent**. There are no metric checkboxes: the initial
+snapshot shares all eight supported wellbeing summaries and sanitized activity
+details available in that window. No new API key or agent configuration is added.
+
+**Your agent may send health data to its cloud provider and retains its existing
+unsandboxed permissions.** Clearing coaching files does not delete provider chats.
+See [Coach scope, sessions and privacy](docs/REFERENCE.md#ask-coach) and
+[optional setup](docs/SETUP.md#6-optional-ask-coach).
+
 ## Update Or Remove
 
 Update Git-managed installs:

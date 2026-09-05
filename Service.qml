@@ -31,6 +31,135 @@ Item {
   readonly property bool demoMode: settings.demoMode === true
   readonly property int refreshMinutes: Math.max(1, Math.min(60, Number(settings.refreshMinutes) || 5))
 
+  property string coachOperation: ""
+  property string coachAgent: ""
+  property string coachMessage: ""
+  property string coachInput: ""
+  property var coachResult: null
+  property string coachOutput: ""
+  readonly property bool coachBusy: coachOperation !== "" || coachWorker.running
+
+  function coachError(code) {
+    switch (code) {
+    case "agent_unavailable": return "The default agent is not available. Install it, then check again."
+    case "agent_not_configured": return "Choose a default agent in Omarchy, then check again."
+    case "agent_unsupported": return "The default agent is not supported. Choose OpenCode, Claude, Codex or Grok."
+    case "agent_changed": return "The default agent changed. Check again and review consent before opening."
+    case "source_changed": return "The data source changed. Review the connection and approve a new coaching session."
+    case "launch_failed": return "The terminal launcher failed. Check your terminal and agent setup."
+    case "invalid_arguments": return "The coaching request is invalid. Review your selections and try again."
+    case "session_error": return "Coaching files could not be prepared or removed. Check local file permissions."
+    case "session_limit": return "The coaching file limit was reached. Clear coaching files before trying again."
+    case "session_busy": return "Another coaching request is active. Try again shortly."
+    case "no_data": return "No supported wellbeing or activity data was found in this window. Check your connection or choose a longer window."
+    case "data_unavailable": return "Coaching data could not be retrieved. Check the connection and try again."
+    case "invalid_config": return "The data connection configuration is invalid. Check the plugin setup."
+    case "auth_error": return "The data connection was not authorized. Check the plugin credentials."
+    case "network_error": return "The data source could not be reached. Check the connection and try again."
+    case "timeout": return "The coaching request timed out. No agent readiness or completion is confirmed."
+    case "ambiguous_source": return "More than one data source matched. Configure a single source before trying again."
+    case "truncated_response": return "The data response was incomplete. No coaching launch is confirmed."
+    case "query_error": return "The coaching data query failed. Check the data source setup."
+    case "invalid_response": return "The coaching helper returned an invalid response."
+    case "response_too_large": return "The coaching response exceeded the size limit."
+    default: return "The coaching request failed. No coaching launch is confirmed."
+    }
+  }
+  function coachExecute(command, input) {
+    if (demoMode || coachBusy) return false
+    coachOperation = command
+    coachInput = input ? JSON.stringify(input) + "\n" : ""
+    coachResult = null
+    coachOutput = ""
+    coachMessage = command === "check" ? "Checking the default agent locally..."
+      : command === "clear" ? "Clearing plugin-owned coaching files..." : "Preparing data and requesting the terminal launcher..."
+    coachWorker.command = ["/usr/bin/python3", decodeURIComponent(Qt.resolvedUrl("coach.py").toString().replace(/^file:\/\//, "")), command]
+    coachWorker.stdinEnabled = command === "launch"
+    coachWatchdog.restart()
+    coachWorker.running = true
+    return true
+  }
+  function checkCoach() {
+    if (demoMode || coachBusy) return false
+    coachAgent = ""
+    return coachExecute("check", null)
+  }
+  function launchCoach(intent, days, stepGoal, agent) {
+    if (demoMode || coachBusy || ["opencode", "claude", "codex", "grok"].indexOf(agent) < 0 || agent !== coachAgent
+        || ["day", "week", "question"].indexOf(intent) < 0 || [7, 30, 90].indexOf(days) < 0
+        || typeof stepGoal !== "number" || !isFinite(stepGoal) || stepGoal <= 0) return false
+    return coachExecute("launch", {intent: intent, days: days, stepGoal: stepGoal, agent: agent})
+  }
+  function clearCoach() { return coachExecute("clear", null) }
+  function finishCoach(exitCode, exitStatus) {
+    if (!coachOperation) return
+    coachWatchdog.stop()
+    var operation = coachOperation
+    var result = coachResult
+    if (!result && !demoMode) {
+      try {
+        var response = JSON.parse(coachOutput)
+        if (response && response.schemaVersion === 1 && ["ok", "error"].indexOf(response.status) >= 0
+            && (response.status === "ok" ? response.error === null : typeof response.error === "string" && response.error.length > 0)
+            && (operation !== "check" || (typeof response.agent === "string"
+                && (response.status === "ok" ? ["opencode", "claude", "codex", "grok"] : ["", "opencode", "claude", "codex", "grok"]).indexOf(response.agent) >= 0)))
+          result = response
+      } catch (error) { /* Only fixed contract errors reach the UI. */ }
+    }
+    coachOperation = ""
+    coachInput = ""
+    coachOutput = ""
+    coachResult = null
+    if (demoMode) { coachAgent = ""; coachMessage = ""; return }
+    if (operation === "check" || operation === "launch") coachAgent = ""
+    if (!result) { coachMessage = coachError("invalid_response"); return }
+    if (result.status === "error") { coachMessage = coachError(result.error); return }
+    if (exitCode !== 0 || exitStatus !== 0) { coachMessage = coachError("launch_failed"); return }
+    if (operation === "check") {
+      coachAgent = result.agent
+      coachMessage = "Default agent detected locally. No health data sent."
+    } else if (operation === "clear") {
+      coachMessage = "Plugin-owned coaching files cleared. Agent chat history was not deleted."
+    } else {
+      coachMessage = "Agent launch requested. Agent readiness, data loading and answer completion are not confirmed."
+    }
+  }
+  Timer {
+    id: coachWatchdog
+    interval: 35000
+    onTriggered: {
+      root.coachResult = {status: "error", error: "timeout"}
+      // Never signal PID 0 if process startup failed.
+      if (coachWorker.processId > 0) coachWorker.signal(9)
+      root.finishCoach(-1, 1)
+    }
+  }
+  Process {
+    id: coachWorker
+    onStarted: {
+      if (root.demoMode || !root.coachOperation) { signal(9); return }
+      if (root.coachOperation === "launch") {
+        write(root.coachInput)
+        root.coachInput = ""
+        stdinEnabled = false // Flush the queued JSON, then deliver EOF to json.load(stdin).
+      }
+    }
+    // No stderr parser: helper diagnostics are discarded, never displayed or logged here.
+    stdout: SplitParser {
+      // Empty delimiter delivers chunks without retaining a previous stream or an unbounded line.
+      splitMarker: ""
+      onRead: function(data) {
+        if (!root.coachOperation || root.demoMode) return
+        if (root.coachOutput.length + data.length > 4096) {
+          root.coachResult = {status: "error", error: "response_too_large"}
+          if (coachWorker.processId > 0) coachWorker.signal(9)
+          root.finishCoach(-1, 1)
+        } else root.coachOutput += data
+      }
+    }
+    onExited: function(exitCode, exitStatus) { root.finishCoach(exitCode, exitStatus) }
+  }
+
   function execute(command, charts) {
     accepted = false
     timedOut = false
@@ -80,7 +209,15 @@ Item {
     message = ""
     Quickshell.execDetached(["/usr/bin/xdg-open", url])
   }
-  onDemoModeChanged: if (shell) startup.restart()
+  onDemoModeChanged: {
+    coachAgent = ""
+    coachMessage = ""
+    if (demoMode && coachOperation) {
+      if (coachWorker.processId > 0) coachWorker.signal(9)
+      finishCoach(-1, 1)
+    }
+    if (shell) startup.restart()
+  }
   Component.onCompleted: startup.start()
   Timer { id: startup; interval: 250; onTriggered: root.reset() }
   Timer { interval: 60000; running: true; repeat: true; onTriggered: root.now = Date.now() }

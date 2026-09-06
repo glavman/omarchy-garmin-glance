@@ -277,7 +277,7 @@ Item {
     target: "garmin-glance"
     function refresh(): void { root.refresh(root.wantCharts) }
     function status(): string {
-      return JSON.stringify({version: "1.0.0", busy: root.busy, demo: root.demoMode,
+      return JSON.stringify({version: "1.1.0", busy: root.busy, demo: root.demoMode,
         status: root.payload ? root.payload.status : "loading", error: root.payload ? root.payload.error : null,
         message: root.message, chartsLoaded: !!root.payload && !!root.payload.chartsFetchedAt,
         historyLoaded: !!root.payload && !!root.payload.historyFetchedAt,

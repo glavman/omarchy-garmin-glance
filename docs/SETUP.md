@@ -33,9 +33,22 @@ Click **Set up live data** or press **S** inside the plugin for the README's
 copyable agent prompt and a link to this guide. Copying does not launch an agent
 or send credentials. No setup actions run automatically.
 
-After completing and verifying the setup below, refresh the plugin. If you
-explicitly enabled **Synthetic demo data** in widget settings, turn it off first.
-An automatically selected preview checks for the connection file on each refresh.
+An enabled automatic preview checks for the connection file on every refresh,
+including scheduled refreshes, and starts querying once a valid file appears.
+**If already enabled, get approval and disable the plugin before preparing or
+replacing connection config**, even when it currently shows demo data:
+
+```bash
+omarchy plugin disable io.github.glavman.garmin-glance
+```
+
+Keep it disabled through setup and verification of authentication, READ-only
+grants and `doctor`; enable only after those checks pass. Skip `plugin add` if
+already installed. If approval is unavailable, stop before changing config.
+
+After completing and verifying the setup below, enable and refresh the plugin.
+If you explicitly enabled **Synthetic demo data** in widget settings, turn it off
+after verification; a connection file does not override that setting.
 Coach and Grafana/activity actions are disabled while previewing.
 
 ## Agent-Assisted Setup
@@ -65,7 +78,11 @@ https://github.com/glavman/omarchy-garmin-glance/blob/main/README.md
    do not downgrade, replace or recreate it. If Garmin data is not being
    collected yet, explain that prerequisite rather than pretending it works.
 
-2. Explain any required stack changes and get my approval before changing
+2. If the plugin is already enabled (including demo), get my approval and run
+   omarchy plugin disable io.github.glavman.garmin-glance before preparing or
+   replacing connection config. Automatic refresh can query as soon as a valid
+   file appears. Keep it disabled until authentication, grants and doctor pass.
+   Explain any required stack changes and get my approval before changing
    accounts/grants, network exposure, stopping containers or restarting the
    desktop shell. Back up affected configuration and, before an authentication
    migration, the database including metadata. Preserve the Compose project
@@ -86,23 +103,26 @@ https://github.com/glavman/omarchy-garmin-glance/blob/main/README.md
    environments, raw query results, Garmin tokens or health data. Ask me to
    enter any required administrator credentials through a local secure prompt.
 
-5. Create or carefully update this owner-only file (directory 0700, file 0600):
+5. With the plugin disabled, create or carefully update this owner-only file
+   (directory 0700, file 0600):
    ~/.config/omarchy-garmin-glance/connection.json
    Set the endpoint, database, reader credentials and confirmed IANA timezone.
    Use source tags only if needed; do not treat tags as access controls.
-   Review the plugin source, install from:
+   Review the plugin source. Only if not already installed, add from:
    https://github.com/glavman/omarchy-garmin-glance.git
-   Add without enabling; decline immediate enable if prompted. Verify auth and
-   grants, run doctor, then enable io.github.glavman.garmin-glance.
+   Add without enabling; decline immediate enable if prompted. For new and existing
+   installs, verify anonymous database queries are denied and the account is
+   non-admin with only READ on the intended database. Run doctor and resolve any
+   connection error, then enable io.github.glavman.garmin-glance. Doctor redacts
+   metric values; SELECT success alone does not prove read-only permissions.
+   Do not write health data to test access.
    Preserve unrelated Omarchy settings; never edit /usr/share/omarchy/.
 
-6. Verify anonymous database queries are denied and the plugin account is
-   non-admin with only READ on the intended database. Check existing Grafana
-   and collector access still works. Open the plugin and check
+6. Check existing Grafana and collector access still works. If Synthetic demo
+   data was explicitly enabled in widget settings, turn it off after verification.
+   Open and refresh the plugin and check
    `omarchy-shell garmin-glance status`: demo must be false, with no connection
-   error and charts loaded. Explain missing/stale device metrics honestly;
-   doctor deliberately redacts metric values, and SELECT success alone does
-   not prove read-only permissions. Do not write health data to test access.
+   error and charts loaded. Explain missing/stale device metrics honestly.
 
 Finish with a short summary of changes, backup locations, verification results
 and anything still blocked. Do not reveal credentials or health measurements,
@@ -534,6 +554,11 @@ References: [InfluxDB authentication](https://docs.influxdata.com/influxdb/v1/ad
 
 ## 3. Configure the Plugin Connection
 
+If already enabled, get approval and disable the plugin as described in
+[Preview Before Connecting](#preview-before-connecting) **before creating or
+editing this file**. Keep it disabled until step 4's checks pass: an enabled
+automatic preview can query on a scheduled refresh as soon as valid config exists.
+
 Create the private directory and an empty file if one doesn't already exist:
 
 ```bash
@@ -578,7 +603,9 @@ encryption; the same loopback/trusted-HTTPS requirements apply.
 ## 4. Install and Enable
 
 Review the source first: Omarchy plugins run unsandboxed with your user access.
-Add without automatic enable so you can check the connection first:
+Keep the plugin disabled until the checks below pass. **If already installed,
+skip the add command** and use the installed code for diagnostics. Otherwise,
+add without automatic enable so you can check the connection first:
 
 ```bash
 omarchy plugin add https://github.com/glavman/omarchy-garmin-glance.git
@@ -587,7 +614,9 @@ omarchy plugin add https://github.com/glavman/omarchy-garmin-glance.git
 If asked to enable immediately, choose no. Public clone access needs no GitHub
 credentials.
 
-Run the diagnostic against the installed code:
+Before enabling, verify authentication rejects anonymous database queries and
+the plugin account is non-admin with only READ on the intended database (step 2).
+Then run the diagnostic against the installed code:
 
 ```bash
 python3 "$HOME/.config/omarchy/plugins/io.github.glavman.garmin-glance/backend.py" doctor
@@ -596,7 +625,8 @@ python3 "$HOME/.config/omarchy/plugins/io.github.glavman.garmin-glance/backend.p
 Expected: `status: "ok"` and `error: null`, or `partial` for missing/stale
 measurements. Doctor deliberately returns null metric values to avoid exposing
 health data; those nulls do **not** mean its query returned no values. An error
-such as `auth_error` or `network_error` must be resolved before expecting data.
+such as `auth_error` or `network_error` must be resolved before enabling.
+Successful reads alone do not prove READ-only grants. Once all checks pass:
 
 ```bash
 omarchy plugin enable io.github.glavman.garmin-glance

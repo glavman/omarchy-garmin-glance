@@ -69,7 +69,7 @@ FocusScope {
         text: "1. Use an existing garmin-grafana stack with InfluxDB 1.x. The collector handles Garmin sign-in and sync; this plugin reads its database, not the Grafana API."
       }
       GuideText {
-        text: "2. Copy this prompt into your Omarchy agent, or follow the manual guide. Review its proposed changes. Use a dedicated READ-only database account and keep credentials out of chat. Nothing is launched automatically."
+        text: "2. Copy this prompt into your Omarchy agent, or follow the manual guide. Get approval and disable this plugin before preparing or replacing connection config: automatic refresh can query as soon as a valid file exists. Use a dedicated READ-only database account and keep credentials out of chat. Nothing is launched automatically."
       }
       GuideButton {
         id: copyButton
@@ -94,7 +94,7 @@ FocusScope {
         onClicked: Qt.openUrlExternally(Guide.documentationUrl)
       }
       GuideText {
-        text: "3. Verify authentication and READ-only grants, then run doctor as described in the guide. The connection belongs in ~/.config/omarchy-garmin-glance/connection.json. Refresh after setup to load live data."
+        text: "3. Keep the plugin disabled while configuring ~/.config/omarchy-garmin-glance/connection.json. Verify enforced authentication, non-admin READ-only grants and doctor as described in the guide. Then enable and refresh to load live data. Do not add an already installed plugin again."
       }
       GuideText {
         visible: root.demo && !!root.service && root.service.requestedDemoMode === true

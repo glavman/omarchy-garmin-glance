@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.glavman.garmin-glance",
   "name": "Garmin Glance",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "glavman",
   "license": "MIT",
-  "description": "A native, read-only dashboard for your local garmin-grafana database.",
+  "description": "Garmin health and activities in your Omarchy bar, with an offline demo. Live data requires an existing garmin-grafana stack and read-only InfluxDB 1.x access.",
   "kinds": ["service", "bar-widget"],
   "entryPoints": {"service": "Service.qml", "barWidget": "BarWidget.qml"},
   "barWidget": {

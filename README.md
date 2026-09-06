@@ -52,6 +52,10 @@ automatically shows a **clearly labelled demo**. Once installed, preview has
 **no network dependency and makes no database requests**. Coach is disabled
 in demo mode; preview never starts an agent.
 
+An enabled automatic preview starts querying on its next refresh (including
+scheduled refreshes) once a valid connection file appears. Before preparing or
+replacing that file, follow the disable-and-verify order below.
+
 **Already configured?** Existing users with a connection file stay live. Invalid configuration,
 authentication failures and network errors never silently switch to demo data.
 Do not remove an existing connection file just to try the preview.
@@ -63,9 +67,12 @@ now show the preview; follow [setup](docs/SETUP.md) to make the connection expli
 Choose **Set up live data (`S`)** in the plugin to open its setup guide, with a
 link to the [full setup documentation](docs/SETUP.md) and the same copyable prompt
 below. This is guidance, not an automatic connection or credential writer.
-Keep secret entry local and approve any stack changes explicitly.
+Keep secret entry local and approve any stack changes explicitly. If the plugin
+is already enabled, get approval and disable it before preparing or replacing
+the connection file. Keep it disabled until authentication, READ-only grants and
+`doctor` checks pass; then enable it. Do not add an already installed plugin again.
 
-After completing setup and verifying access, return to the panel and choose
+After completing setup, verifying access and enabling, return to the panel and choose
 **Refresh (`R`)** to load live data. If you explicitly enabled **Synthetic demo
 data** (`demoMode`) in bar settings, disable it first; a connection file does not
 override forced demo mode. Verify live status rather than assuming setup succeeded.
@@ -97,9 +104,12 @@ account, never Garmin login, a Grafana token or plugin sudo/Docker access.
 Keep credentials and health data out of chat, logs and Git; use secure local
 prompts/files, connection directory 0700 and file 0600. Never destroy volumes,
 rerun the upstream installer or replace/downgrade the database.
-Review source, add without enabling, verify auth/grants and doctor, then enable
-and check live status plus existing collector/Grafana health. Preserve unrelated
-settings. If approval or secure secret entry is unavailable, stop that step.
+Review source. If already enabled, get approval and disable before preparing or
+replacing connection config: automatic refresh can query as soon as it exists.
+Add only if not installed, without enabling. Keep disabled, verify enforced auth,
+non-admin READ-only grants and doctor, then enable and check live status plus
+existing collector/Grafana health. Preserve unrelated settings. If approval or
+secure secret entry is unavailable, stop that step.
 Report changes/blockers without secrets or health values. No commits, pushes or screenshots.
 ```
 
@@ -108,25 +118,55 @@ Report changes/blockers without secrets or health values. No commits, pushes or 
 <details>
 <summary><strong>Manual setup and security checks</strong></summary>
 
-Manual setup: follow [SETUP.md](docs/SETUP.md) to configure
-`~/.config/omarchy-garmin-glance/connection.json`, then add without enabling:
+Manual setup: if already enabled (including the offline preview), get approval
+and disable **before preparing or replacing the connection file**:
+
+```bash
+omarchy plugin disable io.github.glavman.garmin-glance
+```
+
+Keep it disabled while following [SETUP.md](docs/SETUP.md) to configure
+`~/.config/omarchy-garmin-glance/connection.json`. Review source and add without
+enabling **only if not already installed**:
 
 ```bash
 omarchy plugin add https://github.com/glavman/omarchy-garmin-glance.git
+```
+
+Decline immediate enable if prompted. For either a new or existing installation,
+verify authentication is enforced and the account is non-admin with only READ
+on the intended database, then run:
+
+```bash
 python3 "$HOME/.config/omarchy/plugins/io.github.glavman.garmin-glance/backend.py" doctor
 ```
 
-Decline immediate enable if prompted. Verify authentication is enforced, the
-account is non-admin with only READ on the intended database, and `doctor` has
-no connection error before running `omarchy plugin enable io.github.glavman.garmin-glance`.
+Resolve any `doctor` connection error before running
+`omarchy plugin enable io.github.glavman.garmin-glance`.
 `doctor` redacts values; successful reads alone do not prove READ-only grants.
 **Plugins run unsandboxed as your user.** Review the source; private files are
 not encryption. Use loopback HTTP locally or restricted, trusted HTTPS remotely.
 
-If you already enabled the offline preview, complete the same authentication,
-grant and `doctor` checks before relying on live data, then refresh the panel.
+After enabling, refresh and verify live status plus existing collector/Grafana health.
 
 </details>
+
+## Capabilities And Privacy
+
+- **Local Python helpers** read the private connection file and write health-data
+  cache and optional coaching-session files under
+  `${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-garmin-glance/`. These files are not encrypted.
+- **Network access** makes read-only queries to your configured InfluxDB endpoint,
+  including automatic refreshes while enabled. Enforced database authentication
+  and a dedicated non-admin READ-only grant are still required.
+- **Browser and clipboard actions** are explicit: open setup docs, Grafana or
+  Garmin Connect links, or copy the setup prompt. Copying does not launch an agent.
+- **Optional Coach** launches your existing agent only after disclosure and consent
+  for each handoff. That agent may send health data to its cloud provider and
+  retains its existing unsandboxed permissions.
+
+**Plugins run unsandboxed as your user.** These describe behavior, not a sandbox
+or permission boundary. Review the source before enabling.
 
 ## Controls
 

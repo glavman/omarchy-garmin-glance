@@ -30,14 +30,17 @@ Run from the repository root:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
-QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests
+QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/tst_model.qml
+python3 tests/run_qml.py
 omarchy plugin validate .
 git diff --check
 ```
 
 For panel changes, also run the [native navigation tests](docs/REFERENCE.md#diagnostics-and-tests)
 and check narrow layouts, mouse interaction and keyboard-only use. The offscreen
-runner can skip native tests; report those skips rather than calling them passes.
+command checks the model only. The full QML runner needs a running Wayland desktop,
+Quickshell and packaged Omarchy imports; plain `qmltestrunner -input tests` cannot
+load all suites. Report unavailable checks rather than calling them passes.
 
 ## Keep It Safe
 

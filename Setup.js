@@ -11,8 +11,11 @@ var prompt = [
   "Keep credentials and health data out of chat, logs and Git; use secure local",
   "prompts/files, connection directory 0700 and file 0600. Never destroy volumes,",
   "rerun the upstream installer or replace/downgrade the database.",
-  "Review source, add without enabling, verify auth/grants and doctor, then enable",
-  "and check live status plus existing collector/Grafana health. Preserve unrelated",
-  "settings. If approval or secure secret entry is unavailable, stop that step.",
+  "Review source. If already enabled, get approval and disable before preparing or",
+  "replacing connection config: automatic refresh can query as soon as it exists.",
+  "Add only if not installed, without enabling. Keep disabled, verify enforced auth,",
+  "non-admin READ-only grants and doctor, then enable and check live status plus",
+  "existing collector/Grafana health. Preserve unrelated settings. If approval or",
+  "secure secret entry is unavailable, stop that step.",
   "Report changes/blockers without secrets or health values. No commits, pushes or screenshots."
 ].join("\n")

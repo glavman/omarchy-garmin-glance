@@ -76,7 +76,7 @@ def main():
             raise SystemExit("Plugin copied, but discovery timed out. Rescan and enable it manually.")
         time.sleep(0.2)
     subprocess.run(["omarchy", "plugin", "enable", plugin_id], check=True)
-    print("Installed Garmin Glance 1.0.0. Click the watch icon in the bar.")
+    print("Installed Garmin Glance 1.1.0. Click the watch icon in the bar.")
     print("When updating an already loaded version, run: omarchy restart shell")
 
 

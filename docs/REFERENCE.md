@@ -607,13 +607,15 @@ installer does not bundle tests). Here you can also run `python3 backend.py doct
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
-QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests
+QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/tst_model.qml
 python3 tests/run_qml.py
 omarchy plugin validate .
 ```
 
+The offscreen command above checks the model only. Plain `qmltestrunner -input
+tests` cannot load every suite without the Quickshell runtime and host imports.
 The native navigation cases need a running Wayland desktop, Quickshell,
-QtTest and Omarchy's `qs` imports; the offscreen runner may skip them. Run them
+QtTest and Omarchy's `qs` imports. Run them
 from the repository root with a temporary import mapping (adjust the shell path
 if Omarchy is installed elsewhere):
 

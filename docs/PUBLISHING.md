@@ -1,12 +1,11 @@
 # Garmin Glance Publishing
 
 Public repository: <https://github.com/glavman/omarchy-garmin-glance>.
-The first public release is version **1.0.0**, tagged **`1.0.0`**, with fresh
-public history and plugin ID `io.github.glavman.garmin-glance`.
-
-That release identity is not evidence that subsequent Coach integration has been
-published or live-tested. Documentation/package integration alone does not require
-a version bump or authorize a new tag, release or push.
+The current source prepares version **1.1.0** for marketplace submission, with
+plugin ID `io.github.glavman.garmin-glance`. The historical **`v1.0.0`** tag points
+to the initial release, not the later activity, Coach or offline-onboarding work.
+A source version is not evidence of publication or live testing. Creating a tag,
+release, commit, push or submission requires separate owner approval.
 
 ## Privacy Boundary
 
@@ -15,8 +14,9 @@ garmin-grafana deployment. That deployment may contain credentials, Garmin
 session tokens, database volumes or backups, Grafana settings and personal data.
 
 The plugin source uses synthetic test/demo values. No real account, exports,
-health records, screenshots, tokens or private connection file are intended to
-be included. Public attribution in the license, plugin namespace and GitHub
+health records, real-data screenshots, tokens or private connection file are
+intended to be included. Reviewed synthetic-demo artwork is allowed. Public
+attribution in the license, plugin namespace and GitHub
 repository URL is intentional. The timezone is a configurable example/default,
 not a requirement to disclose a user's location.
 
@@ -31,7 +31,7 @@ not a requirement to disclose a user's location.
 - Inspect generated archives and installation packages too. The local installer uses an explicit file allowlist; GitHub source archives instead contain tracked files.
 - Keep runtime JSON/cache data, CSV/GPX/TCX/FIT exports, credentials and private keys outside the repository. Ignore patterns are guardrails, not a security boundary; they do not protect files already tracked.
 - Audit Coach sessions/snapshots under `${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-garmin-glance/coach/` as private runtime storage, never package content or CI artifacts. Keep agent/provider chat exports out too.
-- Verify the installer preserves existing dashboard files and includes `Coach.qml`, `coach.py`, `coach_data.py` and `COACH.md`, with the reviewed setup/reference/publishing docs. Never bundle tests, private connection files, sessions, snapshots or `.lock` files; retain missing-file and symlink rejection checks.
+- Verify the local copy installer preserves existing dashboard files and includes `Coach.qml`, `coach.py`, `coach_data.py` and `COACH.md`, with the reviewed setup/reference/publishing docs. Its runtime package excludes tests and artwork; normal Git installs and source archives include tracked tests and reviewed artwork. Never bundle private connection files, sessions, snapshots or runtime `.lock` files; retain missing-file and symlink rejection checks.
 
 Useful local inspection commands (output can itself contain private metadata):
 
@@ -48,37 +48,159 @@ cleanup. Git is not an appropriate secrets store, regardless of visibility.
 
 ## Marketplace Submission
 
-The [Omarchy Plugins publishing guide](https://omarchyplugins.com/publish.html)
-currently requires a public GitHub repository, a valid root `manifest.json`,
-README, license, and safe installation/removal. A preview is optional.
+The [Omarchy Plugins publishing guide](https://plugins.omarchy.org/publish.html)
+and [submission contract](https://github.com/omacom/omarchy-plugin-marketplace/blob/main/SUBMISSION.md)
+require a public GitHub repository, one valid root `manifest.json`, root README
+with installation/removal instructions, license, documented dependencies, a unique
+plugin ID, and safe installation/removal. A preview, release tag and hosted CI are
+not mandatory. Submit an issue, not a hand-written registry pull request.
 
-1. Complete the privacy audit of the fresh public history and release contents.
-2. Confirm a fresh install follows [SETUP.md](SETUP.md), including the external garmin-grafana and authenticated InfluxDB prerequisites.
-3. Run the tests and manifest validator from the repository root.
-4. Verify version `1.0.0` and tag `1.0.0` for the first release, supported Omarchy/InfluxDB versions, and the public installation URL. For a later, separately approved release, verify its intended version/tag; do not imply the historical tag includes unshipped Coach changes. Confirm display name `Garmin Glance`, ID `io.github.glavman.garmin-glance`, config/cache directory `omarchy-garmin-glance`, and IPC target `garmin-glance` agree across source, tests and docs. Keep the ID stable after publication.
-5. Capture an optional, cropped demo-only preview and review it before tracking it. Raw screenshot directories are ignored intentionally.
-6. With owner approval, publish the reviewed repository and `1.0.0` release. Verify anonymous clone access and inspect the release archive; do not include the separately maintained stack or its secrets.
-7. Submit the repository URL, category and tags through the [marketplace issue form](https://github.com/omacom/omarchy-plugin-marketplace/issues/new?template=submit-plugin.yml).
+Listing metadata:
 
-Suggested category: Health. Suggested tags: Garmin, InfluxDB, dashboard, bar-widget.
-The listing description should say **requires an existing garmin-grafana stack
-and direct read-only InfluxDB 1.x access**. Do not imply plug-and-play Garmin login
-or that a Grafana URL/token alone is sufficient.
+- Repository: `https://github.com/glavman/omarchy-garmin-glance`
+- Category: **Widgets**
+- Tags: **bar**, **quickshell**
+- Optional missing-tag suggestion: **health** (not an actual tag until accepted)
+- ID: `io.github.glavman.garmin-glance` (permanent; do not rename)
+
+The manifest's `barWidget.category: "Health"` is a shell setting, not the
+marketplace category. The marketplace reads name, author, version and description
+from the manifest. Its summary must distinguish the working offline demo from
+live data, which **requires an existing garmin-grafana stack and direct read-only
+InfluxDB 1.x access**. A Grafana URL/token alone is insufficient.
+
+Root `preview.png` is a cropped, metadata-stripped copy of the reviewed synthetic
+dashboard screenshot, retaining the visible Demo label. README images under
+`docs/screenshots/` are not automatically discovered as marketplace previews.
+The marketplace generates card/detail images itself; inputs must be valid images
+under 50 MiB and 40 megapixels. Inspect pixels and metadata after any replacement.
+
+### Readiness Checks
+
+1. Audit tracked files, history, public metadata and any release archive. Keep personal runtime data out of all test reports and artifacts.
+2. On an isolated Omarchy desktop, test the standard install below without `install.py`. With no connection file, opening the watch must show labelled demo data, make no database requests and launch no agent.
+3. Test click, Escape, shell summon/hide, narrow layouts, disable/re-enable, shell restart, update and removal. Confirm unrelated configuration survives and removal leaves private config/cache and the external stack as documented. Do not modify an existing user's installation just to run this checklist.
+4. For live setup, follow [SETUP.md](SETUP.md): obtain approval to disable an already-enabled preview before preparing/replacing config, verify enforced authentication, non-admin READ-only grants and `doctor`, then enable. Invalid config and network/auth failures must not silently become demo data. Never use real health data in automated tests or public evidence.
+5. Run the automated checks below and record the exact commit, Omarchy/Quickshell versions, results and skips. Synthetic helper tests do not prove a real add/update/remove lifecycle, live grants or provider inference.
+6. Reconcile the intended version in `manifest.json`, installer output and IPC status. With owner approval, publish the tested changes; do not move `v1.0.0`. A new release/tag is optional and must not be presented as already published.
+7. Validate the final public commit with the marketplace compatibility checker and static baseline. Address findings and document capabilities for maintainer review. Keep `main` stable while that exact snapshot awaits approval.
+8. Complete the [submission draft](SUBMISSION.md), show its title and body to the owner, and obtain explicit confirmation of all five checklist statements before submitting through the [issue form](https://github.com/omacom/omarchy-plugin-marketplace/issues/new?template=submit-plugin.yml). Do not pre-approve ownership or claim verification on the owner's behalf.
+
+Standard installation in the isolated desktop:
+
+```bash
+omarchy plugin add https://github.com/glavman/omarchy-garmin-glance.git --enable
+```
+
+The normal installer does not execute `install.py` or provision the collector.
+Request normal installation classification because offline preview works without
+configuration; marketplace maintainers decide the classification. Dependencies and
+capabilities belong in the README and submission notes, not invented manifest
+`permissions` or `dependencies` fields. Plugins remain unsandboxed.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -q
-QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests
+QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/tst_model.qml
 python3 tests/run_qml.py
 omarchy plugin validate .
+git diff --check
 ```
 
 Run these in a development checkout, not a locally copied installation; the
 local installer does not bundle tests.
 
-The additional QML runner needs a running host Wayland desktop, Quickshell, QtTest
+The offscreen command checks only the model; plain `qmltestrunner -input tests`
+cannot load all suites. The full QML runner needs a running host Wayland desktop, Quickshell, QtTest
 and packaged Omarchy imports. Retain the existing [native navigation validation](REFERENCE.md#diagnostics-and-tests),
 31-sport icon/alias cases, activity details and Garmin/Grafana link tests alongside
 Coach coverage. Report unavailable host checks and skips, not inferred passes.
+
+### Marketplace Preflight And Updates
+
+From a separately reviewed marketplace checkout with Node.js 24+ and its locked
+dependencies installed, these official interfaces inspect the public default
+branch, not unpublished local edits. Use a private temporary directory for reports:
+
+```bash
+REPORT_DIR=$(mktemp -d)
+VALIDATION_METADATA_PATH="$REPORT_DIR/validation.json" \
+  node scripts/validate-submission.mjs \
+  --repo=https://github.com/glavman/omarchy-garmin-glance
+node scripts/security-baseline.mjs \
+  --metadata="$REPORT_DIR/validation.json" --json="$REPORT_DIR/baseline.json"
+```
+
+Inspect the JSON outcome, not just the exit code. A completed scan can report
+`review-required` or `needs-fixes` with exit zero. Setup/installer files and
+privilege references can require review even when standard installation does not
+execute a custom installer. Never suppress or fabricate baseline evidence.
+
+The [security policy](https://github.com/omacom/omarchy-plugin-marketplace/blob/main/SECURITY.md)
+requires exact-commit evidence and explicit maintainer approval. Approval applies
+to a snapshot, not all future changes or a security guarantee. Per the
+[verification rules](https://github.com/omacom/omarchy-plugin-marketplace/blob/main/VERIFICATION.md),
+later upstream commits can show **Update unverified**. Request verification and
+publication of each newer intended snapshot using the marketplace's Plugin
+verification form. Omarchy install/update currently follows upstream HEAD rather
+than pinning to the marketplace's verified SHA.
+
+### Readiness Record (2026-09-06)
+
+Local candidate: uncommitted 1.1.0 changes based on
+`3a77f6aeeb112f373d30f1881d98cc60274d2929`. This is not a published or verified
+1.1.0 snapshot. Host: Omarchy 4.0.2-1, Quickshell 0.3.1.
+
+| Check | Result and scope |
+| --- | --- |
+| Python suite | Final local candidate rerun: 261 passed |
+| Offscreen model | 1,430 passed, no failures or skips |
+| Full native QML | Final local candidate rerun on an awake desktop: 1,582 passed, no failures or skips. Earlier locked/DPMS-off rendering failures are resolved on the awake desktop |
+| Manifest / QML lint / whitespace | `omarchy plugin validate .`, `qmllint` on entry/panel/setup/Coach files, and `git diff --check` passed |
+| Local marketplace artifacts | Genuine manifest validator and preview processor accepted 1.1.0 and the 926 x 1184 preview; PNG contains no text/EXIF metadata |
+| Submission parser | Unchecked draft rejected as intended; checked in-memory syntax fixture accepted. No owner confirmation or submission performed |
+| Public compatibility | Passed for remote `3a77f6a`, which does not include these local changes |
+| Public static baseline | Complete `review-required`, no findings, `installer` and `privilege` capabilities, for remote `3a77f6a` only |
+| Local advisory detectors | No findings in 20 root text files; same capabilities. Not a canonical or complete snapshot baseline |
+| Disposable VM lifecycle | Passed official add, historical fast-forward update, candidate validation/enable, demo, click/Escape, summon/hide, disable/re-enable, restart, invalid-config refusal and removal/retention checks. See scope below |
+
+Marketplace preflight used source
+`72c3d5bb773c86936caa8469426a8384047e1c13`. The privilege evidence matches the
+warning against plugin sudo/Docker access, not a privileged invocation; the
+reported capability remains subject to maintainer review.
+
+The disposable VM used the official checksum-verified Omarchy 4.0.2 ISO, 4 vCPUs,
+6 GiB RAM and a 40 GiB sparse disk. Installation and testing were offline, with no
+NIC, shared directories, clipboard or forwarded credentials. It was cleanly shut
+down and its disk integrity check passed. The guest ran Omarchy 4.0.2-1,
+Quickshell 0.3.1 and Hyprland 0.56.2.
+
+Official add used a guest-local clone of public history; update fast-forwarded
+`b2fbfc4` to `3a77f6a`. The unpublished 1.1.0 candidate was transferred as an
+explicitly allowlisted, hashed read-only media snapshot and overlaid while
+disabled. This verifies candidate runtime behavior, not published 1.1.0 Git
+distribution. A read-only directory mode inherited from the transfer media
+initially prevented removal; correcting that guest fixture's owner permissions
+allowed official removal to pass. Synthetic config/cache bytes survived removal,
+and unrelated shell settings matched the pre-enable baseline.
+
+No Coach action or provider handoff was invoked and no Coach helper/session was
+observed. A broad no-agent-process assertion did encounter a transient Codex
+process matching the stock agent-usage probe; its parent provenance was not
+captured. Do not claim that no agent process ran anywhere in the guest. With no
+NIC, network access was impossible, but this is not proof that no request was
+attempted. Narrow-layout checks passed in the isolated QML suite, not at alternate
+VM display resolutions.
+
+Outstanding gates before submission:
+
+- Repeat Git add/update against the final published candidate; the VM's local public-history clone and file overlay did not test HTTPS distribution of 1.1.0.
+- Publish only with owner approval, then rerun exact-commit marketplace checks on the final public HEAD. Local validation cannot confer snapshot verification.
+- Review the completed issue with the owner and explicitly confirm all five submission statements before sending.
+
+No real database grants, health records or provider inference were exercised.
+The host's installed plugin was not replaced, enabled/disabled, removed or
+restarted. Lifecycle commands and the full test desktop ran only inside the VM;
+the native QML tests used temporary test windows on the host.
 
 ## Coach Claims
 

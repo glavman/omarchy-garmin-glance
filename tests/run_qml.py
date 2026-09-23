@@ -4,8 +4,9 @@
 Usage: python3 tests/run_qml.py
 Requires a running Wayland desktop for the real Panel keyboard test. Unlike bare
 qmltestrunner -input tests, this supplies qs imports and Quickshell initialization.
-Only QML/JS sources are copied: real backend/coach helpers cannot run. HOME and
-XDG config/data/cache/state are temporary; packaged host imports are read-only.
+Only QML/JS sources and bundled setup references are copied: real backend/coach
+helpers cannot run. HOME and XDG config/data/cache/state are temporary;
+packaged host imports are read-only.
 This is test isolation, not a sandbox for untrusted QML.
 All discovered suites and data rows run; failures and skips fail the whole run.
 Manual execution uses QtTest's internal result/temporary-object APIs, covered by
@@ -173,12 +174,18 @@ def main():
     token = "QML_RUN_" + uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix="garmin-qml-") as directory:
         temp = Path(directory)
-        plugin = temp / "plugin"
+        plugin = temp / "plugin space ü # %"
         tests = plugin / "tests"
         tests.mkdir(parents=True)
         for pattern in ("*.qml", "*.js"):
             for path in source.glob(pattern):
                 shutil.copyfile(path, plugin / path.name)
+        for name in ("docs/SETUP.md", "docs/REFERENCE.md", "README.md"):
+            path = source / name
+            if path.is_file():  # Synthetic runner-lifecycle fixtures have no documentation.
+                target = plugin / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
         suites = []
         for path in sorted((source / "tests").glob("tst_*.qml")):
             name = path.stem.removeprefix("tst_")
@@ -193,7 +200,7 @@ def main():
             if "when: false" not in text:
                 text = text.replace("TestCase {", "TestCase {\n  when: false\n", 1)
             (tests / f"tst_{name}.qml").write_text(text)
-            suites.append({"name": name, "file": f"plugin/tests/tst_{name}.qml", "functions": functions})
+            suites.append({"name": name, "file": (tests / f"tst_{name}.qml").as_uri(), "functions": functions})
         if not suites:
             raise RuntimeError("No QML test suites discovered")
 
@@ -216,7 +223,9 @@ def main():
             path.mkdir()
             env[f"XDG_{kind}_HOME"] = str(path)
         harness = temp / "shell.qml"
-        harness.write_text(HARNESS.replace("SUITES", json.dumps(suites)).replace("RESULT_TOKEN", token))
+        harness.write_text(HARNESS.replace('import "plugin" as Garmin',
+                                          'import "' + plugin.as_uri() + '" as Garmin')
+                           .replace("SUITES", json.dumps(suites)).replace("RESULT_TOKEN", token))
         print(f"Host imports (read-only): {host}/Commons, {host}/Ui", flush=True)
         print("Running " + ", ".join(suite["name"] for suite in suites)
               + ", including synthetic Process and real Panel tests", flush=True)

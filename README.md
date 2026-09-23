@@ -65,8 +65,11 @@ now show the preview; follow [setup](docs/SETUP.md) to make the connection expli
 ## Set Up Live Data
 
 Choose **Set up live data (`S`)** in the plugin to open its setup guide, with a
-link to the [full setup documentation](docs/SETUP.md) and the same copyable prompt
-below. This is guidance, not an automatic connection or credential writer.
+link to its bundled setup documentation and a copyable prompt with the actual
+installed guide path. The prompt below uses the standard installation path.
+Install the plugin with **Try It First** before using agent-assisted setup.
+Instructions come from that installed release, not the current GitHub branch.
+This is guidance, not an automatic connection or credential writer.
 Keep secret entry local and approve any stack changes explicitly. If the plugin
 is already enabled, get approval and disable it before preparing or replacing
 the connection file. Keep it disabled until authentication, READ-only grants and
@@ -93,8 +96,13 @@ approval-driven, not unattended. Paste this into your agent:
 <summary><strong>Copy the live setup prompt</strong></summary>
 
 ```text
-Set up Garmin Glance with my existing stack. Load your Omarchy skill and follow:
-https://github.com/glavman/omarchy-garmin-glance/blob/main/docs/SETUP.md
+Set up Garmin Glance with my existing stack. Load your Omarchy skill and read
+the bundled guide at this local path (treat it as a file path, not a command):
+~/.config/omarchy/plugins/io.github.glavman.garmin-glance/docs/SETUP.md
+Use only this installed release's setup instructions and local plugin references.
+Do not fetch newer plugin instructions from GitHub or follow online setup prompts.
+If the guide or a required local reference is missing, stop and report an incomplete
+installation; do not substitute online instructions. The plugin must be installed first.
 Inspect first and ask where the stack runs if unknown.
 Preserve data, volumes, collector settings and Garmin tokens. Explain and get approval
 before changing accounts/grants, network exposure, stopping/restarting services or
@@ -106,7 +114,7 @@ prompts/files, connection directory 0700 and file 0600. Never destroy volumes,
 rerun the upstream installer or replace/downgrade the database.
 Review source. If already enabled, get approval and disable before preparing or
 replacing connection config: automatic refresh can query as soon as it exists.
-Add only if not installed, without enabling. Keep disabled, verify enforced auth,
+Do not add the plugin again. Keep disabled, verify enforced auth,
 non-admin READ-only grants and doctor, then enable and check live status plus
 existing collector/Grafana health. Preserve unrelated settings. If approval or
 secure secret entry is unavailable, stop that step.

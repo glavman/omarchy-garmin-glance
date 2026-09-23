@@ -75,6 +75,7 @@ TestCase {
     keys.forceActiveFocus()
     keyClick(Qt.Key_S)
     verify(setup.expanded)
+    tryCompare(setup, "guideAvailable", true)
     tryCompare(findChild(setup, "setupCopy"), "activeFocus", true)
     verify(keys.blocked)
     // Reparenting and expansion queue nested Column layouts; wait(0) can leave contentHeight at zero.
@@ -92,7 +93,7 @@ TestCase {
     openSetup()
     var prompt = findChild(setup, "setupPrompt")
     var copy = findChild(setup, "setupCopy")
-    compare(prompt.text, Guide.prompt)
+    compare(prompt.text, Guide.prompt(setup.documentationPath))
     compare(prompt.textFormat, TextEdit.PlainText)
     verify(prompt.readOnly && prompt.selectByMouse)
     compare(copy.text, "Copy setup prompt")
@@ -100,7 +101,7 @@ TestCase {
     // Exercise the result label, not TextEdit.copy(), which writes the desktop clipboard.
     setup.copied = true
     compare(copy.text, "Prompt copied")
-    compare(prompt.text, Guide.prompt)
+    compare(prompt.text, Guide.prompt(setup.documentationPath))
     setup.dismiss()
     verify(!setup.copied)
     compare(copy.text, "Copy setup prompt")
@@ -129,6 +130,38 @@ TestCase {
     compare(panel.historyKey, "sleep")
     keyClick(Qt.Key_R)
     compare(service.calls, [{action: "refresh", charts: true}])
+  }
+
+  function test_bundled_guide_from_relocated_installation() {
+    openSetup()
+    var expectedUrl = Qt.resolvedUrl("../docs/SETUP.md")
+    compare(setup.documentationUrl, expectedUrl)
+    compare(setup.documentationPath, Guide.localPath(expectedUrl))
+    verify(setup.documentationPath.indexOf("plugin space ü # %/docs/SETUP.md") >= 0)
+    verify(setup.setupPrompt.indexOf(setup.documentationPath) >= 0)
+    verify(setup.setupPrompt.indexOf("https://") < 0)
+    setup.open()
+    verify(setup.guideAvailable, "Repeated open must not clear the loaded guide")
+    compare(Guide.localPath("https://example.com/SETUP.md"), "")
+    compare(Guide.localPath("file:///broken%zz"), "")
+    compare(service.calls, [])
+  }
+
+  function test_missing_guide_disables_handoff() {
+    setup.documentationUrl = Qt.resolvedUrl("../docs/missing-setup.md")
+    setup.open()
+    tryCompare(setup, "guideFailed", true)
+    verify(!setup.guideAvailable)
+    compare(findChild(setup, "setupPrompt").text, "")
+    verify(!findChild(setup, "setupCopy").enabled)
+    verify(!findChild(setup, "setupDocs").enabled)
+    verify(findChild(setup, "setupGuideStatus").text.indexOf("Incomplete installation") >= 0)
+    compare(service.calls, [])
+    setup.dismiss()
+    setup.documentationUrl = Qt.resolvedUrl("../docs/SETUP.md")
+    openSetup()
+    verify(findChild(setup, "setupCopy").enabled)
+    verify(findChild(setup, "setupDocs").enabled)
   }
 
   function test_no_automatic_actions() {
@@ -205,7 +238,7 @@ TestCase {
     verify(!panel.showDetails)
     compare(history.cursor, cursor)
     verify(isNaN(overlay.cursorTime) && isNaN(overlayCursor))
-    compare(findChild(setup, "setupPrompt").text, Guide.prompt)
+    compare(findChild(setup, "setupPrompt").text, Guide.prompt(setup.documentationPath))
     verify(setup.expanded)
     compare(service.calls, [])
     keyClick(Qt.Key_Escape)

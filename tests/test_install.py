@@ -17,6 +17,7 @@ ROOT_FILES = (
     "Chart.qml", "MetricCard.qml", "Coach.qml", "WatchFace.qml", "WatchIcon.qml",
     "ActivityIcon.qml", "StressChart.qml", "Model.js", "Grafana.js", "Setup.qml", "Setup.js", "backend.py",
     "coach.py", "coach_data.py", "COACH.md", "README.md", "LICENSE", "install.py",
+    "docs/SETUP.md", "docs/REFERENCE.md",
 )
 PLUGIN_ID = "io.github.glavman.garmin-glance"
 
@@ -30,6 +31,7 @@ class InstallTests(unittest.TestCase):
         self.source.mkdir()
         self.staging = self.root / "staging"
         for name in ROOT_FILES:
+            (self.source / name).parent.mkdir(parents=True, exist_ok=True)
             (self.source / name).write_text(name)
         (self.source / "manifest.json").write_text(json.dumps({"id": PLUGIN_ID}))
 
@@ -68,7 +70,8 @@ class InstallTests(unittest.TestCase):
 
     def test_optional_docs_can_be_absent(self):
         installer.copy_package(self.source, self.staging)
-        self.assertEqual({path.name for path in self.staging.iterdir()}, set(ROOT_FILES))
+        self.assertEqual({str(path.relative_to(self.staging)) for path in self.staging.rglob("*")
+                          if path.is_file()}, set(ROOT_FILES))
 
     def test_symlinked_allowed_files_are_rejected(self):
         secret = self.root / "secret"
@@ -91,6 +94,10 @@ class InstallTests(unittest.TestCase):
         for target in (self.root, self.root / "missing"):
             with self.subTest(target=target.name):
                 docs = self.source / "docs"
+                if docs.is_dir() and not docs.is_symlink():
+                    for path in docs.iterdir():
+                        path.unlink()
+                    docs.rmdir()
                 docs.symlink_to(target, target_is_directory=True)
                 with self.assertRaisesRegex(ValueError, "symlink"):
                     installer.copy_package(self.source, self.staging)
@@ -158,7 +165,8 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(len(validated), 2)
         self.assertEqual(validated[0], self.source)
         self.assertEqual(validated[1].name, PLUGIN_ID)
-        self.assertEqual({path.name for path in destination.iterdir()}, set(ROOT_FILES))
+        self.assertEqual({str(path.relative_to(destination)) for path in destination.rglob("*")
+                          if path.is_file()}, set(ROOT_FILES))
         backups = list((config / "plugin-backups").iterdir())
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / "old.txt").read_text(), "existing install")

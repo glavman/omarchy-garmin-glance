@@ -28,6 +28,18 @@ health
 
 ### Maintainer notes
 
+Resubmission following
+[the setup-instruction review on #5247](https://github.com/omacom/omarchy-plugin-marketplace/issues/5247#issuecomment-5592668189).
+The setup prompt and guide button now use the installed package's `docs/SETUP.md`.
+README and nested guide prompts likewise use installed files, with no online
+fallback. The copy installer requires the setup guide and its reference document;
+the UI disables copying/opening if its guide cannot be read. Remote branch changes
+therefore cannot replace the setup instructions used by an installed release.
+
+Before submitting, replace this paragraph with the final public commit SHA and
+fresh compatibility, security-baseline and test results. The historical validation
+of `5436f2d5242b6a099e56abab1428a0b909e004f9` does not cover this fix.
+
 Native Omarchy bar widget and dashboard with a labelled offline synthetic demo.
 Standard `omarchy plugin add` and enable work without a database connection file;
 preview does not query a database or launch an agent. We request normal install

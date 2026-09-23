@@ -30,7 +30,7 @@ file now show the preview too. Follow this guide to create a private, explicit
 connection with verified authentication and a dedicated READ-only account.
 
 Click **Set up live data** or press **S** inside the plugin for the README's
-copyable agent prompt and a link to this guide. Copying does not launch an agent
+copyable agent prompt and a link to the installed copy of this guide. Copying does not launch an agent
 or send credentials. No setup actions run automatically.
 
 An enabled automatic preview checks for the connection file on every refresh,
@@ -58,7 +58,13 @@ agent to perform the connection setup instead of following every command
 manually. This assumes your agent has the Omarchy skill available. The skill
 covers desktop integration; the database-specific instructions are in this
 guide. The agent should read both rather than assume your stack matches the
-upstream defaults.
+upstream defaults. Install the plugin first using the README's **Try It First**
+section. Agent setup uses only the installed release's plugin instructions;
+relative plugin references must resolve within that same installed package.
+If a required local document is missing, stop and report the incomplete
+installation instead of fetching replacement instructions online. External
+collector/vendor links are background references, not delegation to another
+plugin setup workflow. If the collector is absent, stop at that prerequisite.
 
 Paste the following into your agent. Optionally add your existing stack's
 directory, local/remote host information and preferred IANA timezone. If you
@@ -67,9 +73,14 @@ health records into the conversation.**
 
 ```text
 Set up Garmin Glance on this Omarchy machine using my existing garmin-grafana
-installation. Load the Omarchy skill and read these current instructions:
-https://github.com/glavman/omarchy-garmin-glance/blob/main/docs/SETUP.md
-https://github.com/glavman/omarchy-garmin-glance/blob/main/README.md
+installation. The plugin must already be installed. Load the Omarchy skill and
+read only these installed plugin instructions (file paths, not commands):
+~/.config/omarchy/plugins/io.github.glavman.garmin-glance/docs/SETUP.md
+~/.config/omarchy/plugins/io.github.glavman.garmin-glance/README.md
+For a relocated installation, use the actual path from its Copy setup prompt.
+Resolve relative plugin references within that same installed package. Do not
+fetch newer plugin instructions from GitHub or follow online setup prompts.
+If a required local document is missing, stop and report an incomplete installation.
 
 1. Inspect before changing anything. Locate the existing Compose deployment
    or ask me where it runs. Confirm the Omarchy plugin interface, InfluxDB
@@ -108,10 +119,8 @@ https://github.com/glavman/omarchy-garmin-glance/blob/main/README.md
    ~/.config/omarchy-garmin-glance/connection.json
    Set the endpoint, database, reader credentials and confirmed IANA timezone.
    Use source tags only if needed; do not treat tags as access controls.
-   Review the plugin source. Only if not already installed, add from:
-   https://github.com/glavman/omarchy-garmin-glance.git
-   Add without enabling; decline immediate enable if prompted. For new and existing
-   installs, verify anonymous database queries are denied and the account is
+   Review the installed plugin source. Do not add the plugin again or update it
+   during setup. Verify anonymous database queries are denied and the account is
    non-admin with only READ on the intended database. Run doctor and resolve any
    connection error, then enable io.github.glavman.garmin-glance. Doctor redacts
    metric values; SELECT success alone does not prove read-only permissions.

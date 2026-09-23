@@ -17,10 +17,11 @@ def copy_package(source, staging):
         "Chart.qml", "MetricCard.qml", "Coach.qml", "WatchFace.qml", "WatchIcon.qml",
         "ActivityIcon.qml", "StressChart.qml", "Model.js", "Grafana.js", "Setup.qml", "Setup.js", "backend.py",
         "coach.py", "coach_data.py", "COACH.md", "README.md", "LICENSE", "install.py",
+        "docs/SETUP.md", "docs/REFERENCE.md",
     ]
     if source.is_symlink() or (source / "docs").is_symlink():
         raise ValueError("Refusing to copy a symlinked package directory.")
-    for name in ("docs/SETUP.md", "docs/PUBLISHING.md", "docs/REFERENCE.md", "CONTRIBUTING.md"):
+    for name in ("docs/PUBLISHING.md", "CONTRIBUTING.md"):
         path = source / name
         if path.is_symlink():
             raise ValueError(f"Refusing to copy a symlinked package file: {name}")

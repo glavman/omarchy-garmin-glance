@@ -77,6 +77,15 @@ under 50 MiB and 40 megapixels. Inspect pixels and metadata after any replacemen
 
 ### Readiness Checks
 
+Setup guidance is part of the reviewed payload. The setup UI resolves
+`docs/SETUP.md` beside its installed QML; copied installations require that guide
+and `docs/REFERENCE.md`. Keep the README prompt and `Setup.js` wording aligned
+(the UI substitutes the actual installed path). All plugin instruction references
+must stay within that package, with no online fallback for missing documents.
+Check the entire instruction chain, including prompts inside the guide, whenever
+updating setup docs. A later GitHub branch change must not affect an installed
+release's instructions.
+
 1. Audit tracked files, history, public metadata and any release archive. Keep personal runtime data out of all test reports and artifacts.
 2. On an isolated Omarchy desktop, test the standard install below without `install.py`. With no connection file, opening the watch must show labelled demo data, make no database requests and launch no agent.
 3. Test click, Escape, shell summon/hide, narrow layouts, disable/re-enable, shell restart, update and removal. Confirm unrelated configuration survives and removal leaves private config/cache and the external stack as documented. Do not modify an existing user's installation just to run this checklist.
@@ -144,7 +153,31 @@ publication of each newer intended snapshot using the marketplace's Plugin
 verification form. Omarchy install/update currently follows upstream HEAD rather
 than pinning to the marketplace's verified SHA.
 
+### Bundled Setup Fix — Local Validation (2026-09-23)
+
+Uncommitted candidate on `fix/bundled-setup-guide`, based on public
+`5436f2d5242b6a099e56abab1428a0b909e004f9`:
+
+- Python suite: 261 passed.
+- Offscreen model: 1,430 passed; no failures or skips.
+- Native QML: 1,584 passed, including relocated paths with spaces, Unicode, `#`
+  and `%`, missing-guide refusal, recovery, wrapping and keyboard navigation.
+- `omarchy plugin validate .` and `git diff --check`: passed.
+
+Native tests use temporary copies and synthetic services. They verify local guide
+loading and prompt contents without launching an agent, writing the desktop
+clipboard or opening an external document viewer. Actual clipboard/viewer actions
+and offline add/update lifecycle still need a disposable-desktop smoke check.
+Public marketplace compatibility and baseline checks must run after publication
+against the final commit; no new public snapshot has been validated or submitted.
+
 ### Readiness Record (2026-09-06)
+
+This historical record predates the bundled-setup fix for
+[submission #5247](https://github.com/omacom/omarchy-plugin-marketplace/issues/5247#issuecomment-5592668189).
+It is not validation evidence for the fix. The submission was closed; prepare a
+new submission referencing it after publishing and validating the final fix SHA.
+Record fresh local checks and public exact-commit evidence separately.
 
 Local candidate: uncommitted 1.1.0 changes based on
 `3a77f6aeeb112f373d30f1881d98cc60274d2929`. This is not a published or verified
